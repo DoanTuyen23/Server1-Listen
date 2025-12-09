@@ -1,2 +1,5 @@
 AI|tuyen
 AI|q
+CNTT|q
+CNTT|qq
+CNTT|tuyen

@@ -75,6 +75,9 @@ class ChatClient(ctk.CTk):
         self.contacts = {} 
         self.messages = {} 
         self.current_target = None
+
+        self.BATCH_SIZE = 20 # Chỉ hiện 20 tin mỗi lần load
+        self.current_display_count = 0 # Đếm xem đang hiện bao nhiêu tin
         
         self.init_ui()
 
@@ -200,52 +203,71 @@ class ChatClient(ctk.CTk):
             threading.Thread(target=self.sending_file_thread, args=(filepath,)).start()
 
     # Hàm gửi file trong thread riêng
+    # Hàm gửi file trong thread riêng (ĐÃ NÂNG CẤP UI)
     def sending_file_thread(self, filepath):
         try:
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
             
-            # Hiển thị tin nhắn giả (Bubble) phía mình trước
-            self.after(0, self.render_bubble, self.my_name, f"[FILE] Đang gửi: {filename}...", True, False)
+            # Hiển thị trạng thái đang gửi (Text tạm thời)
+            self.after(0, self.render_bubble, self.my_name, f"Dang gui: {filename}...", True, True) # is_sys=True để hiện chữ nghiêng
 
-            # 1. Gửi gói START: name=sender, target=receiver, data=filename
-            # Dùng trường password để gửi kích thước file (hack trick)
+            # 1. Gửi gói START
             self.client.send(self.pack(MSG_FILE_START, self.my_name, str(filesize), self.current_target, "", filename))
             
-            # 2. Đọc file và gửi từng chunk (Binary)
+            # 2. Đọc file và gửi từng chunk
             with open(filepath, "rb") as f:
                 while True:
-                    chunk = f.read(1024) # Đọc 1024 bytes (khớp BUFF_SIZE bên C++)
+                    chunk = f.read(1024) 
                     if not chunk: break
                     
-                    # Gói tin DATA: Cần pack cẩn thận vì chunk là bytes, không phải string
-                    # data=chunk
-                    # password=độ dài chunk (Vì chunk cuối có thể < 1024 bytes)
-                    
-                    # Lưu ý: struct.pack cần đúng độ dài 1024s. Ta phải đệm (padding) nếu thiếu.
                     chunk_len = len(chunk)
                     padded_chunk = chunk.ljust(1024, b'\0') 
                     
-                    # Tự pack tay gói tin MSG_FILE_DATA để đảm bảo binary không bị lỗi decode
-                    # Format: i 32s 32s 32s 32s 1024s
                     pkt = struct.pack(PACK_FORMAT, 
                                       MSG_FILE_DATA, 
                                       self.my_name.encode(), 
-                                      str(chunk_len).encode(), # Gửi độ dài thật qua password
+                                      str(chunk_len).encode(), 
                                       self.current_target.encode(), 
                                       b"", 
                                       padded_chunk)
                     self.client.send(pkt)
                     
-                    # Nghỉ cực ngắn để Server kịp xử lý (tránh dính gói tin)
                     import time
                     time.sleep(0.005) 
 
             # 3. Gửi gói END
             self.client.send(self.pack(MSG_FILE_END, self.my_name, "", self.current_target))
             
-            self.after(0, self.render_bubble, self.my_name, f"[FILE] Đã gửi: {filename}", True, False)
-            self.after(0, self.scroll_to_bottom)
+            # --- CẬP NHẬT GIAO DIỆN SAU KHI GỬI XONG (QUAN TRỌNG) ---
+            
+            # Định dạng nội dung hiển thị cho khớp với Server (có chữ [FILE])
+            display_text = f"[FILE] {filename}"
+            
+            # A. Lưu vào RAM (Để click qua lại không bị mất nút)
+            if self.current_target not in self.messages: 
+                self.messages[self.current_target] = []
+
+            self.messages[self.current_target].append({
+                'sender': self.my_name,
+                'content': display_text,
+                'is_sys': False,
+                'is_file': True,       # Đánh dấu là File
+                'filename': filename   # Lưu tên file
+            })
+
+            # B. Vẽ nút File lên màn hình (Thay thế dòng thông báo text cũ)
+            # Dùng lambda trong after để truyền được nhiều tham số
+            self.after(0, lambda: self.render_bubble(
+                sender=self.my_name, 
+                content=display_text, 
+                is_me=True, 
+                is_sys=False, 
+                is_file=True,        # Kích hoạt chế độ vẽ nút
+                filename=filename
+            ))
+            
+            self.after(50, self.scroll_to_bottom)
             
         except Exception as e:
             print(f"Lỗi gửi file: {e}")
@@ -323,9 +345,10 @@ class ChatClient(ctk.CTk):
                 for w in self.scroll_chat.winfo_children(): w.destroy()
                 messagebox.showinfo("Thông báo", f"Đã xóa liên hệ {target_name}")
 
+        # --- XỬ LÝ NHẬN FILE MỚI ---
         elif m_type == MSG_FILE_NOTIFY:
             # content chính là tên file (VD: baitap.docx)
-            display_text = f"FILE: {content}"
+            display_text = f"[FILE] {content}"
             
             # 1. Xác định đoạn chat (Private hay Group)
             chat_key = ""
@@ -408,8 +431,12 @@ class ChatClient(ctk.CTk):
         chat_key = ""
         is_history = (type == MSG_HISTORY)
         
+        # --- LOGIC XÁC ĐỊNH NGƯỜI CHAT (Giữ nguyên) ---
         if is_history:
-            real_type = int(raw_data[2].decode().strip('\x00'))
+            # Decode password để lấy type gốc
+            raw_pass_cleaned = raw_data[2].partition(b'\0')[0].decode('utf-8', errors='replace')
+            real_type = int(raw_pass_cleaned) if raw_pass_cleaned.isdigit() else MSG_PRIVATE_CHAT
+            
             if real_type == MSG_PRIVATE_CHAT:
                 chat_key = sender if sender != self.my_name else target
                 mode = "PRIVATE"
@@ -424,21 +451,41 @@ class ChatClient(ctk.CTk):
                 chat_key = target
                 mode = "GROUP"
 
-        if chat_key not in self.messages: self.messages[chat_key] = []
-        self.messages[chat_key].append({'sender': sender, 'content': content, 'is_sys': False})
+        # --- LOGIC MỚI: PHÁT HIỆN FILE TỪ LỊCH SỬ ---
+        is_file_msg = False
+        filename = ""
         
+        # Server C++ lưu file dưới dạng: "[FILE] ten_file.ext"
+        # Nên ta kiểm tra xem content có bắt đầu bằng chuỗi đó không
+        if content.startswith("[FILE] "):
+            is_file_msg = True
+            # Cắt bỏ chữ "[FILE] " (7 ký tự đầu) để lấy tên file sạch
+            filename = content[7:] 
+        
+        # --- LƯU VÀO RAM ---
+        if chat_key not in self.messages: self.messages[chat_key] = []
+        
+        self.messages[chat_key].append({
+            'sender': sender, 
+            'content': content, 
+            'is_sys': False,
+            'is_file': is_file_msg,  # Lưu cờ báo hiệu đây là file
+            'filename': filename     # Lưu tên file để tải về
+        })
+        
+        # Tạo nút sidebar nếu chưa có
         if chat_key not in self.contacts:
             self.add_contact_btn(chat_key, mode)
 
+        # --- CẬP NHẬT UI ---
         if self.current_target == chat_key:
-            # SỬA: Thêm tham số thứ 4 là False (vì đây là tin nhắn thường, không phải system)
-            self.render_bubble(sender, content, sender == self.my_name, False) 
+            # Truyền tham số is_file và filename vào render_bubble
+            self.render_bubble(sender, content, sender == self.my_name, False, 
+                               is_file=is_file_msg, filename=filename)
             
-            # Auto scroll xuống dưới cùng khi có tin mới
-            self.after(50, self.scroll_to_bottom)
+            self.after(50, self.scroll_to_bottom) 
             
         elif not is_history:
-            # Nếu đang không mở chat với người này thì hiện màu đỏ thông báo
             if chat_key in self.contacts:
                 self.contacts[chat_key].set_unread(True)
 
@@ -502,20 +549,52 @@ class ChatClient(ctk.CTk):
         self.contacts[name].set_unread(False)
         self.header_chat.configure(text=f"Đang chat với: {name}")
 
-        # LOGIC MỚI: Hiện nút thành viên nếu là nhóm
+        # Hiện/Ẩn nút thành viên
         if mode == "GROUP":
             self.btn_members.pack(side="right", padx=10, pady=5)
         else:
-            self.btn_members.pack_forget() # Ẩn đi nếu chat riêng
+            self.btn_members.pack_forget() 
         
-        # Load tin nhắn
+        # ==================================================================
+        # 🔴 BƯỚC 1: RESET THANH CUỘN VỀ ĐẦU NGAY LẬP TỨC
+        # Để tránh việc Camera nhìn vào vùng đen phía dưới
+        self.scroll_chat._parent_canvas.yview_moveto(0.0)
+        # ==================================================================
+
+        # Xóa tin nhắn cũ
         for w in self.scroll_chat.winfo_children(): w.destroy()
-        if name in self.messages:
-            for msg in self.messages[name]:
-                self.render_bubble(msg['sender'], msg['content'], msg['sender'] == self.my_name, msg.get('is_sys', False))
         
-        # --- THÊM DÒNG NÀY ---
-        # Đợi 50ms để giao diện vẽ xong tin nhắn rồi mới cuộn
+        # Hiển thị tin nhắn từ RAM (Chỉ 20 tin cuối)
+        if name in self.messages:
+            all_msgs = self.messages[name]
+            total = len(all_msgs)
+            
+            # Chỉ lấy 20 tin cuối cùng
+            start_index = max(0, total - self.BATCH_SIZE)
+            msgs_to_show = all_msgs[start_index:] 
+            
+            # Lưu lại trạng thái là mình đang load từ index nào
+            self.loaded_start_index = start_index 
+
+            # Nếu vẫn còn tin cũ hơn (start_index > 0), hiện nút "Xem tin cũ"
+            if start_index > 0:
+                btn_load_more = ctk.CTkButton(self.scroll_chat, text="▲ Xem tin cũ hơn", 
+                                              fg_color="#444", height=20,
+                                              command=self.load_more_history)
+                btn_load_more.pack(pady=5)
+
+            # Vẽ các tin nhắn đã lọc
+            for msg in msgs_to_show:
+                self.render_bubble(
+                    sender=msg['sender'], 
+                    content=msg['content'], 
+                    is_me=(msg['sender'] == self.my_name), 
+                    is_sys=msg.get('is_sys', False),
+                    is_file=msg.get('is_file', False),
+                    filename=msg.get('filename', "")
+                )
+
+        self.scroll_chat.update_idletasks()
         self.after(50, self.scroll_to_bottom)
 
     def render_bubble(self, sender, content, is_me, is_sys, is_file=False, filename=""):
@@ -524,23 +603,41 @@ class ChatClient(ctk.CTk):
         if is_sys:
             frame.pack(fill="x", pady=5)
             ctk.CTkLabel(frame, text=content, font=("Arial", 11, "italic"), text_color="gray").pack()
-        elif is_me:
+            return # Dừng luôn nếu là tin hệ thống
+
+        # --- XỬ LÝ CHO PHÍA NGƯỜI GỬI (LÀ MÌNH) ---
+        if is_me:
             frame.pack(fill="x", pady=5, anchor="e")
-            ctk.CTkLabel(frame, text=content, fg_color="#0084ff", text_color="white", corner_radius=15, padx=10, pady=5).pack(side="right")
+            
+            if is_file:
+                # Nếu là file mình gửi -> Vẽ nút (Thay vì Label)
+                # Dùng icon khác (ví dụ 📤 hoặc 📁) để phân biệt với nút tải về
+                # Nút này để hiển thị thôi, nên có thể disable để tránh bấm nhầm
+                btn = ctk.CTkButton(frame, text=f"📁 {content}", 
+                                    fg_color="#0066cc", hover_color="#0052a3", # Màu xanh đậm hơn
+                                    width=150,
+                                    state="normal", # Hoặc "disabled" nếu không muốn cho bấm
+                                    # Nếu muốn bấm để tải lại file của chính mình (để test server)
+                                    command=lambda: self.request_download(filename))
+                btn.pack(side="right")
+            else:
+                # Tin nhắn văn bản thường
+                ctk.CTkLabel(frame, text=content, fg_color="#0084ff", text_color="white", corner_radius=15, padx=10, pady=5).pack(side="right")
+
+        # --- XỬ LÝ CHO PHÍA NGƯỜI NHẬN (LÀ HỌ) ---
         else:
             frame.pack(fill="x", pady=5, anchor="w")
             ctk.CTkLabel(frame, text=sender, font=("Arial", 9), text_color="gray").pack(anchor="w", padx=5)
             
-            # Bây giờ biến is_file đã được định nghĩa, code này sẽ chạy đúng
             if is_file:
-                # NẾU LÀ FILE: Vẽ nút Tải về
+                # Nếu là file họ gửi -> Vẽ nút Tải về (Màu xanh lá)
                 btn = ctk.CTkButton(frame, text=f"⬇ {content}", 
                                     fg_color="#2ecc71", hover_color="#27ae60",
                                     width=150,
                                     command=lambda: self.request_download(filename))
                 btn.pack(side="left")
             else:
-                # Tin nhắn thường
+                # Tin nhắn văn bản thường
                 ctk.CTkLabel(frame, text=content, fg_color="#333", text_color="white", corner_radius=15, padx=10, pady=5).pack(side="left")
 
     def req_friend(self):
@@ -579,9 +676,83 @@ class ChatClient(ctk.CTk):
 
     def scroll_to_bottom(self):
         """Hàm cuộn xuống dưới cùng khung chat"""
-        # _parent_canvas là thành phần nội bộ của CTkScrollableFrame
-        # yview_moveto(1.0) nghĩa là cuộn đến vị trí 100% (đáy)
-        self.scroll_chat._parent_canvas.yview_moveto(1.0)
+        try:
+            # Bắt buộc tính toán lại layout trước khi cuộn
+            self.scroll_chat.update_idletasks() 
+            
+            # Cuộn xuống đáy (1.0)
+            self.scroll_chat._parent_canvas.yview_moveto(1.0)
+        except Exception as e:
+            print(f"Lỗi cuộn: {e}")
+
+    def load_more_history(self):
+        """Hàm xử lý khi bấm nút 'Xem tin cũ hơn'"""
+        if not self.current_target or self.current_target not in self.messages: return
+        
+        # 1. Tính toán vị trí tin nhắn cần lấy
+        current_start = self.loaded_start_index
+        new_start = max(0, current_start - self.BATCH_SIZE)
+        
+        if new_start == current_start: return # Hết tin để load rồi
+
+        # 2. Lưu lại số lượng tin nhắn TRƯỚC khi load thêm (để tính tỷ lệ)
+        # Ví dụ: đang hiện 20 tin
+        msgs_before = len(self.messages[self.current_target]) - current_start
+        
+        # Cập nhật index mới
+        self.loaded_start_index = new_start
+        
+        # 3. Vẽ lại giao diện (Lúc này màn hình sẽ bị nhảy lung tung)
+        self.reload_ui_range(new_start)
+        
+        # 4. TÍNH TOÁN VỊ TRÍ CUỘN ĐỂ GIỮ NGUYÊN TẦM NHÌN (QUAN TRỌNG)
+        # Số lượng tin sau khi load (Ví dụ: 40 tin)
+        msgs_after = len(self.messages[self.current_target]) - new_start
+        
+        # Số tin vừa được thêm vào (Ví dụ: 20 tin)
+        added_msgs = msgs_after - msgs_before
+        
+        # Tính tỷ lệ phần trăm chiều cao mà đám tin mới chiếm giữ
+        # Ví dụ: thêm 20 tin trong tổng 40 tin -> Chiếm 0.5 (50%)
+        # Ta muốn thanh cuộn nhảy đến ngay sau đám tin mới này -> Tức là vị trí 0.5
+        scroll_ratio = added_msgs / msgs_after
+        
+        # Nếu có nút "Xem tin cũ" ở trên cùng, nó chiếm 1 ít diện tích, 
+        # ta trừ nhẹ đi 1 xíu (khoảng 0.02) để nhìn thấy được 1 phần tin nhắn cũ vừa load
+        final_pos = max(0.0, scroll_ratio - 0.05) 
+
+        # 5. Thực hiện cuộn
+        self.scroll_chat.update_idletasks() # Bắt buộc tính toán xong giao diện mới cuộn
+        self.scroll_chat._parent_canvas.yview_moveto(final_pos)
+        
+    # --- HÀM VẼ LẠI GIAO DIỆN TỪ VỊ TRÍ CHỈ ĐỊNH ---
+    def reload_ui_range(self, start_idx):
+        """Hàm vẽ lại giao diện từ vị trí start_idx đến cuối"""
+        # Xóa sạch
+        for w in self.scroll_chat.winfo_children(): w.destroy()
+        
+        all_msgs = self.messages[self.current_target]
+        msgs_to_show = all_msgs[start_idx:]
+        
+        # Vẽ nút load more nếu cần
+        if start_idx > 0:
+            ctk.CTkButton(self.scroll_chat, text="▲ Xem tin cũ hơn", 
+                          fg_color="#444", height=20,
+                          command=self.load_more_history).pack(pady=5)
+            
+        for msg in msgs_to_show:
+             self.render_bubble(
+                sender=msg['sender'], 
+                content=msg['content'], 
+                is_me=(msg['sender'] == self.my_name), 
+                is_sys=msg.get('is_sys', False),
+                is_file=msg.get('is_file', False),
+                filename=msg.get('filename', "")
+            )
+        
+        # Quan trọng: Khi load tin cũ, không được scroll xuống đáy nữa
+        # Mà nên giữ vị trí scroll ở trên cùng (để thấy tin vừa load)
+        self.scroll_chat._parent_canvas.yview_moveto(0.0)
 
     # --- HÀM YÊU CẦU TẢI FILE MỚI ---
     def request_download(self, filename):

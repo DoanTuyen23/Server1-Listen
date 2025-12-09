@@ -1,0 +1,114 @@
+﻿📑 Giao thức Server – Client kiểm tra số nguyên tố
+1. Giới thiệu
+Giao thức này định nghĩa cách thức trao đổi dữ liệu giữa Server và Client trong ứng dụng kiểm tra số nguyên tố.
+* Server nhập số nguyên từ bàn phím, gửi cho Client.
+
+* Client kiểm tra tính nguyên tố, trả về kết quả.
+
+* Server so sánh với kết quả đúng: nếu đúng thì gửi lại flag, nếu sai thì gửi thông báo lỗi.
+
+* Kết nối chỉ kết thúc khi một trong hai bên gửi lệnh exit.
+
+________________
+
+
+2. Quy trình giao tiếp
+   1. Kết nối
+
+      * Client khởi tạo kết nối TCP đến Server tại cổng 8080.
+
+         2. Handshake
+
+            * Server gửi: HELLO v1.0\n
+
+            * Client phản hồi: HELLO v1.0\n
+
+            * Nếu handshake thất bại (không đúng định dạng), server đóng kết nối.
+
+               3. Gửi số kiểm tra
+
+                  * Server gửi một số nguyên 32-bit (signed, little-endian).
+
+                  * Số có thể âm hoặc dương. Quy ước: số âm và số < 2 mặc định không phải số nguyên tố.
+
+                     4. Phản hồi kết quả
+
+                        * Client kiểm tra và gửi lại chuỗi:
+
+                           * Prime\n nếu là số nguyên tố.
+
+                           * Not Prime\n nếu không phải số nguyên tố.
+
+                              5. Xác nhận kết quả
+
+                                 * Server đối chiếu với kết quả đúng:
+
+                                    * Nếu đúng → gửi FLAG{client_checked_primes}\n
+
+                                    * Nếu sai → gửi Wrong answer!\n
+
+                                       6. Lặp lại
+
+                                          * Quay lại bước 3.
+
+                                          * Tiếp tục cho đến khi một trong hai bên gửi lệnh exit\n.
+
+                                             7. Kết thúc kết nối
+
+                                                * Bên gửi exit\n → bên kia phải phản hồi exit\n.
+
+                                                * Sau đó cả hai đóng socket (graceful shutdown).
+
+________________
+
+
+3. Định dạng dữ liệu
+                                                   * Số nguyên:
+
+                                                      * 4 byte, little-endian, signed 32-bit (int32).
+
+                                                      * Ví dụ: số 12345 → 39 30 00 00 (hex).
+
+                                                         * Chuỗi:
+
+                                                            * Mã hóa UTF-8.
+
+                                                            * Kết thúc bằng ký tự xuống dòng \n để đánh dấu ranh giới thông điệp.
+
+                                                            * Các chuỗi hợp lệ trong giao thức:
+
+                                                               * HELLO v1.0\n
+
+                                                               * Prime\n
+
+                                                               * Not Prime\n
+
+                                                               * FLAG{client_checked_primes}\n
+
+                                                               * Wrong answer!\n
+
+                                                               * exit\n
+
+________________
+
+
+4. Trạng thái giao thức (State Machine)
+                                                                  * CONNECTING → khi Client kết nối đến Server.
+
+                                                                  * HANDSHAKE → trao đổi thông điệp HELLO.
+
+                                                                  * EXCHANGE → vòng lặp gửi số & nhận kết quả.
+
+                                                                  * TERMINATING → khi nhận/gửi exit\n.
+
+                                                                  * CLOSED → kết nối đóng.
+
+________________
+
+
+5. Lưu ý triển khai
+                                                                     * TCP là giao thức dòng (stream) → khi đọc chuỗi, cần đọc đến ký tự \n để xác định thông điệp đầy đủ.
+
+                                                                     * Nên chạy Server theo mô hình đa luồng hoặc bất đồng bộ để hỗ trợ nhiều Client cùng lúc.
+
+                                                                     * Nếu một bên gửi thông điệp không đúng định dạng, bên kia có quyền đóng kết nối ngay lập tức.

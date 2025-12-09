@@ -9,6 +9,7 @@
 #include <sstream>
 #include "../Common/protocol.h"
 #include "storage.h"
+#include <ctime>
 
 #pragma comment(lib, "ws2_32.lib") 
 
@@ -54,11 +55,11 @@ bool is_exist_in_vector(const string& val, const vector<string>& list) {
     return false;
 }
 
-// Hàm gửi lại toàn bộ dữ liệu cũ cho Client (ĐÃ SỬA LOGIC LỌC)
+// Hàm gửi lại toàn bộ dữ liệu cũ cho Client (FIX LỖI LỘ TIN NHẮN)
 void sync_client_data(SOCKET client, string username) {
     Message msg;
     
-    // 1. Gửi danh sách bạn bè & Lưu vào list để check sau này
+    // 1. Gửi danh sách bạn bè
     vector<string> friends = get_friend_list(username);
     msg.type = MSG_ADD_FRIEND_SUCC; 
     for (size_t i = 0; i < friends.size(); ++i) {
@@ -67,7 +68,7 @@ void sync_client_data(SOCKET client, string username) {
         Sleep(10); 
     }
     
-    // 2. Gửi danh sách nhóm & Lưu vào list để check sau này
+    // 2. Gửi danh sách nhóm
     vector<string> my_groups = get_user_groups(username);
     msg.type = MSG_ADD_GROUP_SUCC; 
     for (size_t i = 0; i < my_groups.size(); ++i) {
@@ -76,8 +77,8 @@ void sync_client_data(SOCKET client, string username) {
         Sleep(10);
     }
     
-    // 3. Gửi lịch sử chat cũ (CÓ LỌC)
-    vector<string> history = get_user_history(username);
+    // 3. Gửi lịch sử chat cũ
+    vector<string> history = get_user_history(username); // Hàm này thực ra load TOÀN BỘ file history
     msg.type = MSG_HISTORY;
     
     for (size_t i = 0; i < history.size(); ++i) {
@@ -86,7 +87,7 @@ void sync_client_data(SOCKET client, string username) {
         vector<string> seglist;
         while(getline(ss, segment, '|')) seglist.push_back(segment);
         
-        // Format: TYPE|SENDER|TARGET|CONTENT
+        // Format chuẩn: TYPE|SENDER|TARGET|CONTENT
         if (seglist.size() >= 4) {
             int type = stoi(seglist[0]);
             string sender = seglist[1];
@@ -95,19 +96,27 @@ void sync_client_data(SOCKET client, string username) {
 
             bool send_it = false;
             
-            // LOGIC LỌC MỚI:
+            // ======================================================
+            // 🔴 SỬA LỖI TẠI ĐÂY: CHECK QUYỀN RIÊNG TƯ
+            // ======================================================
+
             if (type == MSG_PRIVATE_CHAT) {
-                // Xác định đối phương là ai
-                string partner = (sender == username) ? target : sender;
+                // QUY TẮC: User hiện tại (username) PHẢI là sender HOẶC target
+                // Nếu tin nhắn là "q" gửi "tuyen", mà tôi là "qq" -> SAI -> Bỏ qua ngay
+                bool is_involved = (username == sender || username == target);
                 
-                // Chỉ gửi NẾU đối phương đang nằm trong danh sách bạn bè hiện tại
-                if (is_exist_in_vector(partner, friends)) {
-                    send_it = true;
+                if (is_involved) {
+                    // Nếu đã dính líu đến mình, kiểm tra thêm xem đối phương có còn là bạn không
+                    // (Optional: Tuỳ bạn muốn hiện tin nhắn của người đã hủy kết bạn hay không)
+                    string partner = (sender == username) ? target : sender;
+                    if (is_exist_in_vector(partner, friends)) {
+                        send_it = true;
+                    }
                 }
             } 
             else if (type == MSG_GROUP_CHAT) {
-                // Chỉ gửi NẾU mình vẫn đang là thành viên của nhóm đó
-                // (target chính là tên nhóm trong tin nhắn Group)
+                // Với nhóm: target là Tên Nhóm.
+                // Chỉ gửi nếu mình đang ở trong nhóm đó
                 if (is_exist_in_vector(target, my_groups)) {
                     send_it = true;
                 }
@@ -115,7 +124,7 @@ void sync_client_data(SOCKET client, string username) {
             
             if (send_it) {
                 memset(msg.password, 0, 32);
-                sprintf(msg.password, "%d", type); // Hack: Gửi type gốc
+                sprintf(msg.password, "%d", type);
                 strcpy(msg.name, sender.c_str());
                 strcpy(msg.target, target.c_str());
                 strcpy(msg.data, content.c_str());
@@ -200,10 +209,35 @@ DWORD WINAPI handle_client(LPVOID param) {
                 my_name = string(msg.name);
                 EnterCriticalSection(&data_cs);
                 online_users[my_name] = client_socket;
-                LeaveCriticalSection(&data_cs);
+                LeaveCriticalSection(&data_cs); 
+                
                 cout << "[ONLINE] " << my_name << endl;
                 
-                // QUAN TRỌNG: Gửi lại dữ liệu cũ để hiện lên Sidebar
+                // =================================================================
+                // 🔴 BẮT ĐẦU ĐOẠN CODE SỬA LỖI: TỰ ĐỘNG ADD SOCKET VÀO CÁC NHÓM CŨ
+                // =================================================================
+                
+                // 1. Lấy danh sách các nhóm mà User này từng tham gia từ File
+                vector<string> my_groups_list = get_user_groups(my_name);
+
+                EnterCriticalSection(&data_cs); // Nhớ khóa data lại vì thao tác biến toàn cục groups
+                for (size_t i = 0; i < my_groups_list.size(); ++i) {
+                    string gname = my_groups_list[i];
+                    
+                    // Nếu nhóm này có tồn tại trên RAM (Server đã load lên rồi)
+                    if (groups.find(gname) != groups.end()) {
+                        // Thêm socket hiện tại của user vào danh sách nhận tin của nhóm
+                        groups[gname].members.push_back(client_socket);
+                        cout << "[RE-JOIN] User " << my_name << " da duoc add lai vao RAM cua nhom: " << gname << endl;
+                    }
+                }
+                LeaveCriticalSection(&data_cs);
+                
+                // =================================================================
+                // 🔴 KẾT THÚC ĐOẠN CODE SỬA LỖI
+                // =================================================================
+
+                // Gửi lại dữ liệu cũ để hiện lên Sidebar
                 sync_client_data(client_socket, my_name);
                 
             } else {
@@ -438,15 +472,19 @@ DWORD WINAPI handle_client(LPVOID param) {
         if (msg.type == MSG_FILE_START) {
             string fname(msg.data); // Tên file nằm trong biến data
             string sender(msg.name);
+
+            time_t now = time(0);
             
-            // Tạo tên file duy nhất: Files/timestamp_filename
-            // (Đơn giản hóa: Lưu thẳng tên file, cẩn thận trùng)
-            string save_path = "Server/Data/Files/" + fname;
+            // Tạo tên mới: "timestamp_tengoc" (VD: 173841234_anh.jpg)
+            // Dùng to_string để chuyển số sang chuỗi
+            string new_fname = to_string(now) + "_" + fname;
+            
+            string save_path = "Server/Data/Files/" + new_fname;
             
             current_file = new ofstream(save_path.c_str(), ios::binary);
-            current_filename = fname;
+            current_filename = new_fname;
             
-            cout << "[FILE START] " << sender << " gui file: " << fname << endl;
+            cout << "[FILE START] " << sender << " gui file: " << fname << " -> Luu thanh: " << new_fname << endl;
         }
         
         // 12. NHẬN DỮ LIỆU FILE (BINARY)
