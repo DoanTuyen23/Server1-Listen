@@ -102,3 +102,11 @@
 4|q|CNTT|[FILE] 1765379800_MAX7219.PDF
 3|q|tuyen|[FILE] 1765380165_MAX7219.PDF
 3|q|tuyen|alo
+3|tuyen|q|alo
+3|tuyen|q|alo
+3|tuyen|q|.
+3|tuyen|q|.
+3|tuyen|q|.
+3|q|tuyen|lo cái c
+4|tuyen|AI|alo
+3|tuyen|q|alo

@@ -31,12 +31,11 @@ string trim(const string& str) {
     return str.substr(first, (last - first + 1));
 }
 
-// Hàm load dữ liệu từ file lên RAM
+// Hàm khởi tạo dữ liệu server từ database (File)
 void init_server_data() {
     map<string, string> temp_groups;
     load_groups_to_memory(temp_groups);
     
-    // SỬA: Dùng vòng lặp kiểu cũ để tránh lỗi biên dịch
     for (map<string, string>::iterator it = temp_groups.begin(); it != temp_groups.end(); ++it) {
         string name = it->first;
         string pass = it->second;
@@ -55,7 +54,7 @@ bool is_exist_in_vector(const string& val, const vector<string>& list) {
     return false;
 }
 
-// Hàm gửi lại toàn bộ dữ liệu cũ cho Client (FIX LỖI LỘ TIN NHẮN)
+// Hàm gửi lại toàn bộ dữ liệu cũ cho Client sau khi đăng nhập thành công
 void sync_client_data(SOCKET client, string username) {
     Message msg;
     
@@ -87,7 +86,6 @@ void sync_client_data(SOCKET client, string username) {
         vector<string> seglist;
         while(getline(ss, segment, '|')) seglist.push_back(segment);
         
-        // Format chuẩn: TYPE|SENDER|TARGET|CONTENT
         if (seglist.size() >= 4) {
             int type = stoi(seglist[0]);
             string sender = seglist[1];
@@ -95,19 +93,11 @@ void sync_client_data(SOCKET client, string username) {
             string content = seglist[3];
 
             bool send_it = false;
-            
-            // ======================================================
-            // 🔴 SỬA LỖI TẠI ĐÂY: CHECK QUYỀN RIÊNG TƯ
-            // ======================================================
 
             if (type == MSG_PRIVATE_CHAT) {
-                // QUY TẮC: User hiện tại (username) PHẢI là sender HOẶC target
-                // Nếu tin nhắn là "q" gửi "tuyen", mà tôi là "qq" -> SAI -> Bỏ qua ngay
                 bool is_involved = (username == sender || username == target);
                 
                 if (is_involved) {
-                    // Nếu đã dính líu đến mình, kiểm tra thêm xem đối phương có còn là bạn không
-                    // (Optional: Tuỳ bạn muốn hiện tin nhắn của người đã hủy kết bạn hay không)
                     string partner = (sender == username) ? target : sender;
                     if (is_exist_in_vector(partner, friends)) {
                         send_it = true;
@@ -115,8 +105,6 @@ void sync_client_data(SOCKET client, string username) {
                 }
             } 
             else if (type == MSG_GROUP_CHAT) {
-                // Với nhóm: target là Tên Nhóm.
-                // Chỉ gửi nếu mình đang ở trong nhóm đó
                 if (is_exist_in_vector(target, my_groups)) {
                     send_it = true;
                 }
@@ -135,20 +123,6 @@ void sync_client_data(SOCKET client, string username) {
     }
 }
 
-// // Hàm trả về chuỗi danh sách thành viên: "UserA, UserB, UserC"
-// string get_group_members_str(string group_name) {
-//     string filename = "Server/Data/" + group_name + "_members.txt";
-//     ifstream f(filename.c_str());
-//     string line, result = "";
-//     while (getline(f, line)) {
-//         if (!line.empty()) result += line + ", ";
-//     }
-//     f.close();
-//     // Xóa dấu phẩy cuối
-//     if (result.length() > 2) result = result.substr(0, result.length() - 2);
-//     return result;
-// }
-
 // 2. Hàm xóa dòng trong file (An toàn tuyệt đối)
 void remove_line_from_file(string filename, string text_to_remove) {
     string temp_file = filename + ".tmp";
@@ -166,9 +140,6 @@ void remove_line_from_file(string filename, string text_to_remove) {
 
     while (getline(in, line)) {
         string clean_line = trim(line);
-        
-        // Nếu dòng đọc được KHÁC target thì giữ lại.
-        // Nếu dòng đọc được == target thì bỏ qua (tức là xóa).
         if (!clean_line.empty() && clean_line != target) {
             out << line << endl;
         }
@@ -180,6 +151,7 @@ void remove_line_from_file(string filename, string text_to_remove) {
     rename(temp_file.c_str(), filename.c_str());
 }
 
+// Hàm xử lý từng client kết nối
 DWORD WINAPI handle_client(LPVOID param) {
     SOCKET client_socket = (SOCKET)param;
     Message msg;
@@ -212,12 +184,6 @@ DWORD WINAPI handle_client(LPVOID param) {
                 LeaveCriticalSection(&data_cs); 
                 
                 cout << "[ONLINE] " << my_name << endl;
-                
-                // =================================================================
-                // 🔴 BẮT ĐẦU ĐOẠN CODE SỬA LỖI: TỰ ĐỘNG ADD SOCKET VÀO CÁC NHÓM CŨ
-                // =================================================================
-                
-                // 1. Lấy danh sách các nhóm mà User này từng tham gia từ File
                 vector<string> my_groups_list = get_user_groups(my_name);
 
                 EnterCriticalSection(&data_cs); // Nhớ khóa data lại vì thao tác biến toàn cục groups
@@ -232,10 +198,6 @@ DWORD WINAPI handle_client(LPVOID param) {
                     }
                 }
                 LeaveCriticalSection(&data_cs);
-                
-                // =================================================================
-                // 🔴 KẾT THÚC ĐOẠN CODE SỬA LỖI
-                // =================================================================
 
                 // Gửi lại dữ liệu cũ để hiện lên Sidebar
                 sync_client_data(client_socket, my_name);
@@ -637,7 +599,7 @@ int main() {
     SOCKET server_socket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in server_addr = {AF_INET, htons(SERVER_PORT)};
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr));
+    bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)); //
     listen(server_socket, 5);
 
     cout << "=== SERVER FINAL STARTED ===" << endl;
