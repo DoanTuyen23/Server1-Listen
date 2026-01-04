@@ -1,3 +1,5 @@
 q|1
 tuyen|123
 qq|1
+admin|admin
+t|1

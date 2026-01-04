@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <set>        
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -20,9 +21,14 @@ struct GroupInfo {
     vector<SOCKET> members;
 };
 
+// --- BIẾN TOÀN CỤC ---
 CRITICAL_SECTION data_cs; 
 map<string, SOCKET> online_users;     
 map<string, GroupInfo> groups;        
+
+// Map lưu lời mời kết bạn đang chờ (RAM)
+// Key: Người nhận (UserB) -> Value: Danh sách người mời (UserA, UserC...)
+map<string, set<string> > pending_invites; 
 
 string trim(const string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
@@ -77,7 +83,7 @@ void sync_client_data(SOCKET client, string username) {
     }
     
     // 3. Gửi lịch sử chat cũ
-    vector<string> history = get_user_history(username); // Hàm này thực ra load TOÀN BỘ file history
+    vector<string> history = get_user_history(username); 
     msg.type = MSG_HISTORY;
     
     for (size_t i = 0; i < history.size(); ++i) {
@@ -135,7 +141,6 @@ void remove_line_from_file(string filename, string text_to_remove) {
         return;
     }
 
-    // Chuẩn hóa text cần xóa (VD: "NhomA|UserB")
     string target = trim(text_to_remove);
 
     while (getline(in, line)) {
@@ -186,20 +191,16 @@ DWORD WINAPI handle_client(LPVOID param) {
                 cout << "[ONLINE] " << my_name << endl;
                 vector<string> my_groups_list = get_user_groups(my_name);
 
-                EnterCriticalSection(&data_cs); // Nhớ khóa data lại vì thao tác biến toàn cục groups
+                EnterCriticalSection(&data_cs); 
                 for (size_t i = 0; i < my_groups_list.size(); ++i) {
                     string gname = my_groups_list[i];
-                    
-                    // Nếu nhóm này có tồn tại trên RAM (Server đã load lên rồi)
                     if (groups.find(gname) != groups.end()) {
-                        // Thêm socket hiện tại của user vào danh sách nhận tin của nhóm
                         groups[gname].members.push_back(client_socket);
                         cout << "[RE-JOIN] User " << my_name << " da duoc add lai vao RAM cua nhom: " << gname << endl;
                     }
                 }
                 LeaveCriticalSection(&data_cs);
 
-                // Gửi lại dữ liệu cũ để hiện lên Sidebar
                 sync_client_data(client_socket, my_name);
                 
             } else {
@@ -208,31 +209,73 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
         }
         
-        // 2. KẾT BẠN (Gửi yêu cầu)
+        // 2. KẾT BẠN (CẬP NHẬT: Thêm logic lưu vào danh sách chờ)
         else if (msg.type == MSG_FRIEND_REQ) {
             EnterCriticalSection(&data_cs);
             string target(msg.target);
-            // Nếu người kia online -> Gửi gói tin sang cho họ
+            string sender(msg.name);
+
+            // A. Luôn lưu vào danh sách chờ (Pending List)
+            pending_invites[target].insert(sender);
+
+            // B. Nếu người kia online -> Gửi gói tin sang cho họ ngay (Popup)
             if (online_users.find(target) != online_users.end()) {
                 send(online_users[target], (char*)&msg, sizeof(Message), 0);
                 cout << "[FORWARD] Loi moi ket ban tu " << my_name << " -> " << target << endl;
+            } else {
+                cout << "[PENDING] Luu loi moi tu " << my_name << " -> " << target << " (Offline)" << endl;
             }
             LeaveCriticalSection(&data_cs);
         }
+
+        // --- THÊM MỚI: YÊU CẦU LẤY DANH SÁCH LỜI MỜI (Nút Chuông) ---
+        else if (msg.type == MSG_REQ_PENDING_LIST) {
+            string list_str = "";
+            EnterCriticalSection(&data_cs);
+            
+            // Kiểm tra xem user hiện tại có lời mời nào không
+            if (pending_invites.find(my_name) != pending_invites.end()) {
+                set<string>& list = pending_invites[my_name];
+                for (set<string>::iterator it = list.begin(); it != list.end(); ++it) {
+                    if (list_str.length() > 0) list_str += ",";
+                    list_str += *it;
+                }
+            }
+            LeaveCriticalSection(&data_cs);
+
+            // Gửi danh sách về cho Client
+            Message resp;
+            resp.type = MSG_RESP_PENDING_LIST; // Type 28
+            // Dữ liệu danh sách để vào trường data (vì có thể dài hơn 32 bytes)
+            memset(resp.data, 0, sizeof(resp.data));
+            if (!list_str.empty()) {
+                strncpy(resp.data, list_str.c_str(), 1023);
+            }
+            send(client_socket, (char*)&resp, sizeof(Message), 0);
+            cout << "[PENDING LIST] Gui danh sach cho " << my_name << ": " << list_str << endl;
+        }
         
-        // 3. CHẤP NHẬN KẾT BẠN
+        // 3. CHẤP NHẬN KẾT BẠN (CẬP NHẬT: Xóa khỏi danh sách chờ)
         else if (msg.type == MSG_FRIEND_ACCEPT) {
             // Lưu vào file
             add_friend_db(msg.name, msg.target);
             
+            // --- XÓA KHỎI PENDING LIST ---
+            EnterCriticalSection(&data_cs);
+            if (pending_invites.find(msg.name) != pending_invites.end()) {
+                pending_invites[msg.name].erase(msg.target);
+            }
+            LeaveCriticalSection(&data_cs);
+            // -----------------------------
+
             Message update;
             update.type = MSG_ADD_FRIEND_SUCC;
             
-            // Báo cho MÌNH (người bấm đồng ý) -> Hiện bạn lên Sidebar
+            // Báo cho MÌNH
             strcpy(update.target, msg.target); 
             send(client_socket, (char*)&update, sizeof(Message), 0);
             
-            // Báo cho NGƯỜI KIA (người gửi lời mời) -> Hiện mình lên Sidebar của họ
+            // Báo cho NGƯỜI KIA
             EnterCriticalSection(&data_cs);
             if (online_users.find(msg.target) != online_users.end()) {
                 strcpy(update.target, msg.name);
@@ -251,13 +294,11 @@ DWORD WINAPI handle_client(LPVOID param) {
             LeaveCriticalSection(&data_cs);
 
             if (exists) {
-                // Nếu trùng tên -> Báo lỗi
                 Message resp;
                 resp.type = MSG_CREATE_GROUP_FAIL;
                 strcpy(resp.data, "Ten nhom da ton tai!");
                 send(client_socket, (char*)&resp, sizeof(Message), 0);
             } else {
-                // Nếu chưa có -> Tạo bình thường
                 create_group_db(gname, msg.group_pass);
                 add_group_member_db(gname, my_name);
                 
@@ -275,50 +316,42 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
         }
 
-        // 5. VÀO NHÓM (THÊM MỚI: Logic join group)
+        // 5. VÀO NHÓM
         else if (msg.type == MSG_JOIN_GROUP_REQ) {
             string gname(msg.target);
             string pass(msg.group_pass);
             bool ok = false;
 
             EnterCriticalSection(&data_cs);
-            // Kiểm tra nhóm có tồn tại và đúng pass không
             if (groups.find(gname) != groups.end()) {
                 if (groups[gname].password == pass) {
                     ok = true;
-                    // Thêm socket vào danh sách nhận tin ngay lập tức
                     groups[gname].members.push_back(client_socket);
                 }
             }
             LeaveCriticalSection(&data_cs);
 
             if (ok) {
-                // Lưu vào file database để lần sau login vẫn còn
                 add_group_member_db(gname, my_name);
-
-                // QUAN TRỌNG: Gửi gói tin này thì Sidebar bên Client mới hiện nhóm lên
                 Message resp;
                 resp.type = MSG_ADD_GROUP_SUCC;
                 strcpy(resp.target, gname.c_str());
                 send(client_socket, (char*)&resp, sizeof(Message), 0);
             } else {
-                // Báo lỗi sai pass hoặc nhóm không tồn tại (Dùng tạm Login Fail để báo)
                 Message resp;
-                resp.type = MSG_LOGIN_FAIL; // Client sẽ hiện "Lỗi"
+                resp.type = MSG_LOGIN_FAIL;
                 send(client_socket, (char*)&resp, sizeof(Message), 0);
             }
         }
 
         // 6. YÊU CẦU XEM THÀNH VIÊN
         else if (msg.type == MSG_REQ_MEMBER_LIST) {
-            // Gọi hàm mới trong storage.cpp
             vector<string> mems = get_group_members(msg.target);
             
             string mem_str = "";
             for (size_t i = 0; i < mems.size(); ++i) {
                 mem_str += mems[i] + ", ";
             }
-            // Xóa dấu phẩy thừa cuối cùng
             if (mem_str.length() > 2) mem_str = mem_str.substr(0, mem_str.length() - 2);
             if (mem_str.empty()) mem_str = "(Chua co thanh vien)";
 
@@ -331,10 +364,7 @@ DWORD WINAPI handle_client(LPVOID param) {
         
         // 7. CHAT RIÊNG
         else if (msg.type == MSG_PRIVATE_CHAT) {
-            // Lưu tin nhắn
             save_message(my_name, msg.target, msg.data, MSG_PRIVATE_CHAT);
-            
-            // Chuyển tiếp
             EnterCriticalSection(&data_cs);
             if (online_users.find(msg.target) != online_users.end()) {
                 strcpy(msg.name, my_name.c_str());
@@ -350,7 +380,6 @@ DWORD WINAPI handle_client(LPVOID param) {
              
              EnterCriticalSection(&data_cs);
              if (groups.find(msg.target) != groups.end()) {
-                 // SỬA: Dùng vòng lặp chỉ số để tránh lỗi biên dịch
                  vector<SOCKET>& mems = groups[msg.target].members;
                  for (size_t i = 0; i < mems.size(); ++i) {
                      if (mems[i] != client_socket) {
@@ -365,14 +394,9 @@ DWORD WINAPI handle_client(LPVOID param) {
         // 9. RỜI NHÓM
         else if (msg.type == MSG_LEAVE_GROUP) {
             string gname(msg.target);
-            
-            // Format trong file storage: "TenNhom|TenUser"
             string line_to_remove = gname + "|" + my_name;
-            
-            // Xóa trong file tổng group_members.txt
             remove_line_from_file("Server/Data/group_members.txt", line_to_remove);
 
-            // Xóa Socket trên RAM (để ngắt chat ngay)
             EnterCriticalSection(&data_cs);
             if (groups.find(gname) != groups.end()) {
                 vector<SOCKET> &mems = groups[gname].members;
@@ -385,7 +409,6 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
             LeaveCriticalSection(&data_cs);
 
-            // Báo client xóa nút
             Message resp;
             resp.type = MSG_REMOVE_CONTACT;
             strcpy(resp.target, gname.c_str());
@@ -394,36 +417,27 @@ DWORD WINAPI handle_client(LPVOID param) {
             cout << "[LEAVE] " << my_name << " roi nhom " << gname << endl;
         }
 
-        // 10. HỦY KẾT BẠN (Cập nhật logic 2 chiều)
+        // 10. HỦY KẾT BẠN
         else if (msg.type == MSG_UNFRIEND) {
             string friend_name(msg.target);
-            
-            // 1. Xóa trong Database (Cả 2 chiều A|B và B|A)
             string line1 = my_name + "|" + friend_name;
             string line2 = friend_name + "|" + my_name;
             
             remove_line_from_file("Server/Data/friends.txt", line1);
             remove_line_from_file("Server/Data/friends.txt", line2);
 
-            // 2. Gửi lệnh xóa cho MÌNH (Người bấm hủy)
-            // -> Xóa nút tên người kia khỏi Sidebar của mình
             Message resp;
             resp.type = MSG_REMOVE_CONTACT;
             strcpy(resp.target, friend_name.c_str());
             send(client_socket, (char*)&resp, sizeof(Message), 0);
             
-            // 3. Gửi lệnh xóa cho NGƯỜI KIA (Nếu họ đang Online)
-            // -> Xóa nút tên mình khỏi Sidebar của họ
-            EnterCriticalSection(&data_cs); // Bắt buộc dùng khóa vì truy cập online_users
+            EnterCriticalSection(&data_cs); 
             if (online_users.find(friend_name) != online_users.end()) {
                 SOCKET friend_socket = online_users[friend_name];
-                
                 Message notify;
                 notify.type = MSG_REMOVE_CONTACT;
-                strcpy(notify.target, my_name.c_str()); // Bảo họ xóa tên MÌNH
-                
+                strcpy(notify.target, my_name.c_str()); 
                 send(friend_socket, (char*)&notify, sizeof(Message), 0);
-                cout << "[NOTIFY] Da bao cho " << friend_name << " xoa nut " << my_name << endl;
             }
             LeaveCriticalSection(&data_cs);
             
@@ -432,27 +446,20 @@ DWORD WINAPI handle_client(LPVOID param) {
 
         // 11. BẮT ĐẦU NHẬN FILE
         if (msg.type == MSG_FILE_START) {
-            string fname(msg.data); // Tên file nằm trong biến data
+            string fname(msg.data);
             string sender(msg.name);
-
             time_t now = time(0);
-            
-            // Tạo tên mới: "timestamp_tengoc" (VD: 173841234_anh.jpg)
-            // Dùng to_string để chuyển số sang chuỗi
             string new_fname = to_string(now) + "_" + fname;
-            
             string save_path = "Server/Data/Files/" + new_fname;
             
             current_file = new ofstream(save_path.c_str(), ios::binary);
             current_filename = new_fname;
-            
-            cout << "[FILE START] " << sender << " gui file: " << fname << " -> Luu thanh: " << new_fname << endl;
+            cout << "[FILE START] " << sender << " gui file: " << fname << endl;
         }
         
         // 12. NHẬN DỮ LIỆU FILE (BINARY)
         else if (msg.type == MSG_FILE_DATA) {
             if (current_file && current_file->is_open()) {
-                // Đọc độ dài chunk từ trường password
                 int chunk_len = atoi(msg.password); 
                 if (chunk_len > 0 && chunk_len <= 1024) {
                     current_file->write(msg.data, chunk_len);
@@ -460,7 +467,7 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
         }
         
-        // 13. KẾT THÚC FILE -> THÔNG BÁO CHO NGƯỜI NHẬN
+        // 13. KẾT THÚC FILE
         else if (msg.type == MSG_FILE_END) {
             if (current_file) {
                 current_file->close();
@@ -469,25 +476,19 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
             
             string sender(msg.name);
-            string target(msg.target); // Người nhận hoặc Nhóm
-            
+            string target(msg.target);
             cout << "[FILE END] Da luu file tu " << sender << endl;
             
-            // --- THÔNG BÁO CHO NGƯỜI NHẬN ---
-            // Tạo thông báo: "[FILE] sender da gui file: filename"
             Message notify;
             notify.type = MSG_FILE_NOTIFY;
             strcpy(notify.name, sender.c_str());
             strcpy(notify.target, target.c_str());
-            strcpy(notify.data, current_filename.c_str()); // Tên file
+            strcpy(notify.data, current_filename.c_str()); 
             
-            // Logic gửi thông báo (tương tự chat)
-            // Nếu là Private
             EnterCriticalSection(&data_cs);
             if (online_users.find(target) != online_users.end()) {
                 send(online_users[target], (char*)&notify, sizeof(Message), 0);
             }
-            // Nếu là Group (cần duyệt danh sách mem)
             else if (groups.find(target) != groups.end()) {
                  vector<SOCKET>& mems = groups[target].members;
                  for (size_t i = 0; i < mems.size(); ++i) {
@@ -498,7 +499,6 @@ DWORD WINAPI handle_client(LPVOID param) {
             }
             LeaveCriticalSection(&data_cs);
             
-            // Lưu lịch sử chat dạng văn bản để load lại sau
             string history_content = "[FILE] " + current_filename;
             int type_save = (groups.find(target) != groups.end()) ? MSG_GROUP_CHAT : MSG_PRIVATE_CHAT;
             save_message(sender, target, history_content, type_save);
@@ -506,58 +506,49 @@ DWORD WINAPI handle_client(LPVOID param) {
 
         // 14. XỬ LÝ YÊU CẦU TẢI FILE TỪ CLIENT
         else if (msg.type == MSG_FILE_DOWNLOAD_REQ) {
-            string filename(msg.data); // Tên file client muốn tải
+            string filename(msg.data);
             string filepath = "Server/Data/Files/" + filename;
-            
-            cout << "[DOWNLOAD] Client " << my_name << " yeu cau tai file: " << filename << endl;
+            cout << "[DOWNLOAD] Client " << my_name << " yeu cau tai: " << filename << endl;
 
-            ifstream infile(filepath.c_str(), ios::binary | ios::ate); // Mở chế độ Binary + Đặt con trỏ ở cuối để lấy size
-            
+            ifstream infile(filepath.c_str(), ios::binary | ios::ate);
             if (infile.is_open()) {
-                // 1. Lấy kích thước file
                 int filesize = infile.tellg(); 
-                infile.seekg(0, ios::beg); // Quay về đầu file
+                infile.seekg(0, ios::beg);
 
-                // 2. Gửi gói START (Server -> Client)
-                // Password chứa filesize, Data chứa tên file
                 Message start_msg;
                 start_msg.type = MSG_FILE_START; 
                 sprintf(start_msg.password, "%d", filesize);
                 strcpy(start_msg.data, filename.c_str());
                 send(client_socket, (char*)&start_msg, sizeof(Message), 0);
-                Sleep(10); // Nghỉ xíu
+                Sleep(10); 
 
-                // 3. Gửi nội dung file (DATA)
                 char buffer[1024];
                 while (!infile.eof()) {
                     infile.read(buffer, 1024);
-                    int bytes_read = infile.gcount(); // Số byte thực tế đọc được
+                    int bytes_read = infile.gcount();
                     
                     if (bytes_read > 0) {
                         Message data_msg;
                         data_msg.type = MSG_FILE_DATA;
-                        sprintf(data_msg.password, "%d", bytes_read); // Gửi độ dài chunk
-                        memcpy(data_msg.data, buffer, bytes_read);    // Copy binary an toàn
-                        
+                        sprintf(data_msg.password, "%d", bytes_read);
+                        memcpy(data_msg.data, buffer, bytes_read); 
                         send(client_socket, (char*)&data_msg, sizeof(Message), 0);
-                        Sleep(5); // Nghỉ để tránh dính gói tin
+                        Sleep(5);
                     }
                 }
                 infile.close();
 
-                // 4. Gửi gói END
                 Message end_msg;
                 end_msg.type = MSG_FILE_END;
                 strcpy(end_msg.data, filename.c_str());
                 send(client_socket, (char*)&end_msg, sizeof(Message), 0);
-                
-                cout << "[DOWNLOAD] Da gui xong file cho " << my_name << endl;
+                cout << "[DOWNLOAD] Done." << endl;
             } else {
                 cout << "[ERROR] Khong tim thay file: " << filepath << endl;
             }
         }
 
-        // 15. XỬ LÝ GAME CARO (Relay - Chuyển tiếp y hệt chat riêng)
+        // 15. XỬ LÝ GAME CARO
         else if (msg.type == MSG_GAME_REQ || msg.type == MSG_GAME_ACCEPT || 
                  msg.type == MSG_GAME_MOVE || msg.type == MSG_GAME_END) {
             
@@ -565,9 +556,7 @@ DWORD WINAPI handle_client(LPVOID param) {
             string target(msg.target);
             
             EnterCriticalSection(&data_cs);
-            // Nếu người nhận đang online thì chuyển gói tin sang
             if (online_users.find(target) != online_users.end()) {
-                // Đảm bảo gói tin giữ nguyên người gửi
                 strcpy(msg.name, sender.c_str()); 
                 send(online_users[target], (char*)&msg, sizeof(Message), 0);
             }
@@ -589,9 +578,9 @@ DWORD WINAPI handle_client(LPVOID param) {
 
 int main() {
     InitializeCriticalSection(&data_cs);
-    system("mkdir Server\\Data 2> NUL"); // Tự tạo thư mục Data
+    system("mkdir Server\\Data 2> NUL"); 
     
-    init_server_data(); // Load dữ liệu cũ
+    init_server_data(); 
 
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -599,7 +588,7 @@ int main() {
     SOCKET server_socket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in server_addr = {AF_INET, htons(SERVER_PORT)};
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)); //
+    bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)); 
     listen(server_socket, 5);
 
     cout << "=== SERVER FINAL STARTED ===" << endl;

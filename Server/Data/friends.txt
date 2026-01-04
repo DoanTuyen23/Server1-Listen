@@ -1,2 +1,4 @@
+tuyen|admin
 q|tuyen
-qq|q
+qq|tuyen
+q|qq

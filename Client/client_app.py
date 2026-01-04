@@ -46,6 +46,145 @@ MSG_GAME_REQ          = 23  # Yêu cầu chơi game
 MSG_GAME_ACCEPT       = 24  # Chấp nhận chơi game
 MSG_GAME_MOVE         = 25  # Di chuyển trong game
 MSG_GAME_END          = 26  # Kết thúc game
+MSG_REQ_PENDING_LIST  = 27  # Yêu cầu danh sách lời mời kết bạn đang chờ
+MSG_RESP_PENDING_LIST = 28  # Trả lời danh sách lời mời kết bạn đang chờ
+
+# --- LỚP POPUP TÙY CHỈNH ---
+class CustomPopup(ctk.CTkToplevel):
+    def __init__(self, master, title, message, type="INFO"):
+        super().__init__(master)
+        self.title(title)
+        self.result = None # Kết quả mặc định là None (nếu bấm Hủy hoặc tắt window)
+        
+        # --- CẤU HÌNH KÍCH THƯỚC & VỊ TRÍ ---
+        w_p, h_p = 350, 180
+        
+        # Tính toán vị trí để căn giữa so với cửa sổ cha (master)
+        x_parent = master.winfo_x()
+        y_parent = master.winfo_y()
+        w_parent = master.winfo_width()
+        h_parent = master.winfo_height()
+        
+        new_x = int(x_parent + (w_parent - w_p) / 2)
+        new_y = int(y_parent + (h_parent - h_p) / 2)
+        
+        self.geometry(f"{w_p}x{h_p}+{new_x}+{new_y}")
+        self.resizable(False, False)
+        
+        # --- GIAO DIỆN (Dùng pack để xếp dọc từ trên xuống) ---
+        
+        # 1. Label thông báo (Tự động xuống dòng nếu dài)
+        self.lbl = ctk.CTkLabel(self, text=message, wraplength=320, font=("Arial", 14))
+        self.lbl.pack(pady=(20, 10), padx=10, fill="x")
+        
+        # 2. Xử lý riêng cho loại INPUT (Thêm ô nhập liệu)
+        self.entry = None
+        if type == "INPUT":
+            self.entry = ctk.CTkEntry(self, width=250, placeholder_text="Nhập tại đây...")
+            self.entry.pack(pady=(0, 10))
+            self.entry.bind("<Return>", lambda e: self.on_input_ok()) # Enter để OK luôn
+            # Tự động focus để gõ luôn không cần click chuột
+            self.after(100, self.entry.focus)
+
+        # 3. Frame chứa các nút bấm (Nằm dưới cùng)
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.pack(side="bottom", pady=15, fill="x")
+
+        # --- CÁC LOẠI NÚT BẤM ---
+        if type == "INFO":
+            ctk.CTkButton(self.btn_frame, text="OK", width=100, command=self.on_ok).pack()
+            
+        elif type == "CONFIRM": # Yes/No
+            ctk.CTkButton(self.btn_frame, text="Đồng ý", width=100, fg_color="green", command=self.on_yes).pack(side="left", padx=20, expand=True)
+            ctk.CTkButton(self.btn_frame, text="Hủy", width=100, fg_color="#C0392B", command=self.on_no).pack(side="right", padx=20, expand=True)
+            
+        elif type == "INPUT": # OK/Cancel cho nhập liệu
+            ctk.CTkButton(self.btn_frame, text="OK", width=100, command=self.on_input_ok).pack(side="left", padx=20, expand=True)
+            ctk.CTkButton(self.btn_frame, text="Hủy", width=100, fg_color="gray", command=self.on_no).pack(side="right", padx=20, expand=True)
+
+        # --- THIẾT LẬP MODAL (Chặn cửa sổ cha) ---
+        self.transient(master) # Là con của cửa sổ chính
+        self.grab_set()        # Chiếm quyền điều khiển
+        master.wait_window(self) # Chờ đóng mới chạy tiếp code
+
+    # --- CÁC HÀM XỬ LÝ ---
+    def on_ok(self):
+        self.destroy()
+
+    def on_yes(self):
+        self.result = True
+        self.destroy()
+
+    def on_no(self):
+        self.result = None # Bấm hủy trả về None
+        self.destroy()
+        
+    def on_input_ok(self):
+        if self.entry:
+            val = self.entry.get().strip()
+            # Nếu muốn bắt buộc nhập mới cho OK thì mở comment dòng dưới
+            # if not val: return 
+            self.result = val
+        self.destroy()
+
+# --- LỚP POPUP THÔNG BÁO LỜI MỜI KẾT BẠN ---
+class NotificationPopup(ctk.CTkToplevel):
+    def __init__(self, master, data_str, on_accept_callback):
+        super().__init__(master)
+        self.title("Lời mời kết bạn")
+        
+        # Căn giữa màn hình
+        w_p, h_p = 400, 300
+        x_parent = master.winfo_x()
+        y_parent = master.winfo_y()
+        w_parent = master.winfo_width()
+        h_parent = master.winfo_height()
+        new_x = int(x_parent + (w_parent - w_p) / 2)
+        new_y = int(y_parent + (h_parent - h_p) / 2)
+        self.geometry(f"{w_p}x{h_p}+{new_x}+{new_y}")
+        
+        self.on_accept = on_accept_callback
+        
+        # Tiêu đề
+        ctk.CTkLabel(self, text="DANH SÁCH LỜI MỜI", font=("Arial", 16, "bold")).pack(pady=10)
+
+        # Khu vực cuộn
+        self.scroll = ctk.CTkScrollableFrame(self)
+        self.scroll.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Xử lý dữ liệu: data_str dạng "UserA,UserB,UserC"
+        users = [u for u in data_str.split(',') if u]
+
+        if not users:
+            ctk.CTkLabel(self.scroll, text="Không có lời mời nào.", text_color="gray").pack(pady=20)
+        else:
+            for user in users:
+                self.create_row(user)
+                
+        # Nút đóng
+        ctk.CTkButton(self, text="Đóng", command=self.destroy, fg_color="#555").pack(pady=10)
+
+        self.transient(master)
+        self.grab_set()
+
+    def create_row(self, user):
+        frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        frame.pack(fill="x", pady=5)
+        
+        # Tên người mời
+        ctk.CTkLabel(frame, text=user, font=("Arial", 13, "bold")).pack(side="left", padx=10)
+        
+        # Nút Đồng ý
+        btn_ok = ctk.CTkButton(frame, text="Đồng ý", width=80, height=25, fg_color="green",
+                               command=lambda u=user, f=frame: self.accept_friend(u, f))
+        btn_ok.pack(side="right", padx=5)
+
+    def accept_friend(self, user, frame_widget):
+        # Gọi callback để Client gửi lệnh lên Server
+        self.on_accept(user)
+        # Xóa dòng đó khỏi giao diện
+        frame_widget.destroy()
+        # (Optional) Hiện thông báo nhỏ hoặc cập nhật lại giao diện
 
 # --- LỚP GIAO DIỆN ---
 class ContactButton(ctk.CTkButton):
@@ -151,7 +290,7 @@ class CaroBoard(ctk.CTkToplevel):
                 if self.check_win(row, col, self.my_symbol):
                     self.game_over = True
                     self.lbl_status.configure(text="BẠN THẮNG! 🏆", text_color="gold")
-                    messagebox.showinfo("Kết quả", "Chúc mừng! Bạn đã thắng.")
+                    self.master.show_info("Kết quả", "Chúc mừng! Bạn đã thắng.")
                 else:
                     self.set_turn(False)
                 
@@ -165,11 +304,10 @@ class CaroBoard(ctk.CTkToplevel):
             self.draw_symbol(row, col, self.enemy_symbol)
             self.board_data[key] = self.enemy_symbol
             
-            # Kiểm tra xem nó có thắng mình không (Check hộ luôn cho chắc)
             if self.check_win(row, col, self.enemy_symbol):
                 self.game_over = True
                 self.lbl_status.configure(text="BẠN THUA RỒI! 💀", text_color="red")
-                messagebox.showinfo("Kết quả", "Bạn đã thua!")
+                self.master.show_info("Kết quả", "Bạn đã thua!")
             else:
                 self.set_turn(True)
 
@@ -217,7 +355,7 @@ class CaroBoard(ctk.CTkToplevel):
     # Xử lý khi đóng cửa sổ
     def on_close(self):
         if not self.game_over:
-            if messagebox.askyesno("Thoát", "Đang chơi mà thoát là thua đó nha?"):
+            if self.master.show_confirm("Thoát", "Đang chơi mà thoát là thua đó nha?"):
                 self.destroy()
         else:
             self.destroy()
@@ -226,7 +364,7 @@ class CaroBoard(ctk.CTkToplevel):
 class ChatClient(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Messenger Pro Max")
+        self.title("Messenger")
         self.geometry("1100x700")
         ctk.set_appearance_mode("Dark")
         
@@ -234,6 +372,7 @@ class ChatClient(ctk.CTk):
         self.my_name = ""
         self.contacts = {} 
         self.messages = {} 
+        self.contact_order = []
         self.current_target = None
 
         self.BATCH_SIZE = 20 # Chỉ hiện 20 tin mỗi lần load
@@ -259,7 +398,7 @@ class ChatClient(ctk.CTk):
         self.main_ui = ctk.CTkFrame(self)
         
         # Sidebar
-        self.sidebar = ctk.CTkFrame(self.main_ui, width=260, corner_radius=0)
+        self.sidebar = ctk.CTkFrame(self.main_ui, width=300, corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         
         self.lbl_name = ctk.CTkLabel(self.sidebar, text="...", font=("Arial", 20, "bold"))
@@ -268,11 +407,18 @@ class ChatClient(ctk.CTk):
         self.entry_add = ctk.CTkEntry(self.sidebar, placeholder_text="Nhập tên người/nhóm...")
         self.entry_add.pack(fill="x", padx=10, pady=5)
         
+        # --- KHU VỰC CÁC NÚT CHỨC NĂNG ---
         btn_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=5)
-        ctk.CTkButton(btn_frame, text="+ Bạn", width=70, fg_color="green", command=self.req_friend).pack(side="left", padx=2)
-        ctk.CTkButton(btn_frame, text="+ Nhóm", width=70, fg_color="#D35400", command=self.create_group).pack(side="left", padx=2)
-        ctk.CTkButton(btn_frame, text="Vào Nhóm", width=70, fg_color="#2980B9", command=self.join_group).pack(side="left", padx=2)
+        btn_frame.pack(fill="x", padx=5) 
+        ctk.CTkButton(btn_frame, text="+ Bạn", width=70, fg_color="green", 
+                      command=self.req_friend).pack(side="left", padx=2)
+        ctk.CTkButton(btn_frame, text="+ Nhóm", width=70, fg_color="#D35400", 
+                      command=self.create_group).pack(side="left", padx=2)
+        ctk.CTkButton(btn_frame, text="Vào Nhóm", width=70, fg_color="#2980B9", 
+                      command=self.join_group).pack(side="left", padx=2)
+        self.btn_notify = ctk.CTkButton(btn_frame, text="🔔", width=30, fg_color="#8e44ad", 
+                                        command=self.req_notification_list)
+        self.btn_notify.pack(side="left", padx=2)
 
         ctk.CTkLabel(self.sidebar, text="─── DANH SÁCH ───").pack(pady=10)
         self.scroll_contacts = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent")
@@ -285,9 +431,6 @@ class ChatClient(ctk.CTk):
         # Header Frame (Để chứa tên nhóm và nút xem thành viên)
         self.header_frame = ctk.CTkFrame(self.right_frame, height=40, fg_color="#222")
         self.header_frame.pack(fill="x")
-
-        self.header_chat = ctk.CTkLabel(self.header_frame, text="Chào mừng!", font=("Arial", 16, "bold"), text_color="white")
-        self.header_chat.pack(side="left", padx=20, pady=5)
 
         # Nút xem thành viên (Mặc định ẩn, chỉ hiện khi chat nhóm)
         self.btn_members = ctk.CTkButton(self.header_frame, text="Thành viên", width=80, height=25, 
@@ -319,6 +462,39 @@ class ChatClient(ctk.CTk):
         self.downloading_path = ""   # Đường dẫn lưu file
 
         ctk.CTkButton(self.input_frame, text="Gửi", width=60, command=self.send_msg).pack(side="right", padx=5)
+
+    # --- HÀM DI CHUYỂN LIÊN HỆ LÊN ĐẦU DANH SÁCH ---
+    def move_to_top(self, name):
+        """Đưa liên hệ có tên 'name' lên đầu danh sách"""
+        if name not in self.contacts: return
+        
+        # 1. Cập nhật danh sách thứ tự (Logic)
+        if name in self.contact_order:
+            self.contact_order.remove(name) # Xóa vị trí cũ
+        self.contact_order.insert(0, name)  # Chèn vào đầu
+        
+        # 2. Vẽ lại giao diện (UI)
+        # Tạm thời gỡ bỏ tất cả nút khỏi màn hình (nhưng không xóa dữ liệu)
+        for btn in self.contacts.values():
+            btn.pack_forget()
+            
+        # Pack lại từng nút theo thứ tự mới trong contact_order
+        for contact_name in self.contact_order:
+            if contact_name in self.contacts:
+                self.contacts[contact_name].pack(fill="x", pady=2, padx=5)
+
+
+    # --- HÀM GỌI POPUP TIỆN ÍCH (THÊM MỚI VÀO ĐÂY) ---
+    def show_info(self, title, msg):
+        CustomPopup(self, title, msg, "INFO")
+        
+    def show_confirm(self, title, msg):
+        popup = CustomPopup(self, title, msg, "CONFIRM")
+        return popup.result # Trả về True/False
+        
+    def show_input(self, title, msg):
+        popup = CustomPopup(self, title, msg, "INPUT")
+        return popup.result
     
     # --- HÀM ĐÓNG GÓI DỮ LIỆU AN TOÀN ---
     def pack(self, type, name="", pwd="", target="", gpwd="", data=""):
@@ -439,6 +615,18 @@ class ChatClient(ctk.CTk):
             print(f"Lỗi gửi file: {e}")
             messagebox.showerror("Lỗi", "Không thể gửi file!")
 
+    # --- HÀM YÊU CẦU LẤY DANH SÁCH LỜI MỜI ---
+    def req_notification_list(self):
+        """Gửi yêu cầu lấy danh sách lời mời đang chờ"""
+        self.client.send(self.pack(MSG_REQ_PENDING_LIST, self.my_name, "", ""))
+
+    # --- HÀM XỬ LÝ HIỂN THỊ BẢNG THÔNG BÁO LỜI MỜI ---
+    def accept_pending_request(self, target_name):
+        """Xử lý khi bấm Đồng ý trong bảng thông báo"""
+        # Gửi lệnh chấp nhận kết bạn (MSG_FRIEND_ACCEPT)
+        self.client.send(self.pack(MSG_FRIEND_ACCEPT, self.my_name, "", target_name))
+        self.show_info("Thành công", f"Đã chấp nhận kết bạn với {target_name}")
+
     def handle_packet(self, data):
         """Xử lý logic khi nhận được gói tin"""
         
@@ -472,40 +660,34 @@ class ChatClient(ctk.CTk):
             
         # 3. Xử lý lời mời kết bạn
         elif m_type == MSG_FRIEND_REQ:
-            ans = messagebox.askyesno("Kết bạn", f"{sender} muốn kết bạn. Đồng ý?")
-            if ans:
+            if self.show_confirm("Kết bạn", f"{sender} muốn kết bạn. Đồng ý?"):
                 self.client.send(self.pack(MSG_FRIEND_ACCEPT, self.my_name, "", sender))
 
         # Xử lý lỗi tạo nhóm trùng tên
         elif m_type == MSG_CREATE_GROUP_FAIL:
-            messagebox.showerror("Thất bại", content)
+            self.show_info("Thất bại", content)
 
         # Xử lý hiển thị danh sách thành viên
         elif m_type == MSG_RESP_MEMBER_LIST:
-            # content chứa danh sách thành viên
-            # target chứa tên nhóm
-            messagebox.showinfo(f"Thành viên nhóm {target}", f"Danh sách:\n{content}")
+            self.show_info(f"Thành viên nhóm {target}", f"Danh sách:\n{content}")
 
         # --- XÓA NÚT KHI RỜI NHÓM/HỦY KẾT BẠN THÀNH CÔNG ---
         elif m_type == MSG_REMOVE_CONTACT:
-            target_name = target # Tên cần xóa
-            
-            # 1. Xóa nút khỏi giao diện
+            target_name = target
             if target_name in self.contacts:
-                self.contacts[target_name].destroy() # Xóa widget
-                del self.contacts[target_name]       # Xóa khỏi dict
+                self.contacts[target_name].destroy()
+                del self.contacts[target_name]
             
-            # 2. Xóa dữ liệu chat cũ (tùy chọn)
             if target_name in self.messages:
                 del self.messages[target_name]
 
-            # 3. Nếu đang mở đoạn chat đó thì clear màn hình
             if self.current_target == target_name:
                 self.current_target = None
                 self.header_chat.configure(text="...")
-                self.btn_members.pack_forget() # Ẩn nút thành viên
+                self.btn_members.pack_forget()
                 for w in self.scroll_chat.winfo_children(): w.destroy()
-                messagebox.showinfo("Thông báo", f"Đã xóa liên hệ {target_name}")
+                # SỬA: Dùng show_info
+                self.show_info("Thông báo", f"Đã xóa liên hệ {target_name}")
 
         # --- XỬ LÝ NHẬN FILE MỚI ---
         elif m_type == MSG_FILE_NOTIFY:
@@ -572,29 +754,22 @@ class ChatClient(ctk.CTk):
             if self.downloading_file:
                 self.downloading_file.close()
                 self.downloading_file = None
-                
-                ans = messagebox.askyesno("Tải xong", "Đã tải xong file. Bạn có muốn mở ngay không?")
-                if ans:
+                # SỬA: Dùng show_confirm
+                if self.show_confirm("Tải xong", "Đã tải xong file. Mở ngay không?"):
                     try:
-                        # Mở file trên Windows
                         os.startfile(self.downloading_path)
                     except:
-                        # Fallback cho các OS khác (nếu cần)
                         subprocess.call(['open', self.downloading_path])
         # 4. GAME: NHẬN LỜI MỜI
         elif m_type == MSG_GAME_REQ:
-            ans = messagebox.askyesno("Thách đấu", f"{sender} muốn chơi Caro với bạn. Chiến không?")
-            if ans:
-                # Đồng ý -> Gửi gói ACCEPT -> Mình đi sau (O)
+            if self.show_confirm("Thách đấu", f"{sender} muốn chơi Caro. Chiến không?"):
                 self.client.send(self.pack(MSG_GAME_ACCEPT, self.my_name, "", sender))
-                # Mình (người nhận lời mời) sẽ là O, đi sau
                 self.after(0, lambda: self.start_game(sender, False, "O"))
-                self.current_target = sender # Chuyển tab chat sang đối thủ luôn
+                self.current_target = sender
 
         # 5. GAME: ĐỐI PHƯƠNG ĐỒNG Ý
         elif m_type == MSG_GAME_ACCEPT:
-           # Mình (người mời) sẽ là X, đi trước
-            messagebox.showinfo("Vào game", f"{sender} đã đồng ý! Bạn (X) đi trước.")
+            self.show_info("Vào game", f"{sender} đã đồng ý! Bạn (X) đi trước.")
             self.after(0, lambda: self.start_game(sender, True, "X"))
 
         # 6. GAME: NHẬN NƯỚC ĐI
@@ -609,11 +784,32 @@ class ChatClient(ctk.CTk):
 
                     # Kiểm tra xem họ có báo WIN không (trong trường password - data[2])
                     raw_flags = data[2].partition(b'\0')[0].decode('utf-8', errors='replace')
+                    
                     if "WIN" in raw_flags:
                         self.game_window.lbl_status.configure(text="BẠN THUA RỒI! 💀", text_color="red")
                         self.game_window.game_over = True
-                        messagebox.showinfo("Kết quả", "Đối thủ đã thắng!")
-            except: pass
+                        
+                        # SỬA: Dùng show_info (đảm bảo bạn đã thêm hàm show_info vào class ChatClient)
+                        self.show_info("Kết quả", "Đối thủ đã thắng!")
+            except Exception as e:
+                print(f"Lỗi xử lý nước đi: {e}")
+
+        # --- XỬ LÝ NHẬN DANH SÁCH LỜI MỜI ---
+        elif m_type == MSG_RESP_PENDING_LIST:
+            # content chứa danh sách user: "UserA,UserB"
+            NotificationPopup(self, content, self.accept_pending_request)
+
+        if type != MSG_HISTORY:
+            # Xác định ai là người cần đưa lên top
+            # Nếu chat riêng: Người gửi (sender) nhảy lên top
+            # Nếu chat nhóm: Tên nhóm (target) nhảy lên top
+            name_to_bump = target if (type == MSG_GROUP_CHAT) else sender
+            
+            # Trường hợp đặc biệt: Nếu mình gửi tin (message echo từ server)
+            if sender == self.my_name:
+                name_to_bump = target
+
+            self.move_to_top(name_to_bump)
 
         
 
@@ -708,6 +904,8 @@ class ChatClient(ctk.CTk):
         self.contacts[name] = btn 
         
         if name not in self.messages: self.messages[name] = []
+        self.contact_order.insert(0, name) 
+        self.move_to_top(name)
 
     def show_context_menu(self, event, name, type):
         # Tạo menu kiểu cổ điển của Tkinter (Vì CustomTkinter chưa hỗ trợ Menu tốt)
@@ -722,11 +920,11 @@ class ChatClient(ctk.CTk):
         menu.post(event.x_root, event.y_root)
 
     def req_leave_group(self, name):
-        if messagebox.askyesno("Xác nhận", f"Rời nhóm {name}?"):
+        if self.show_confirm("Xác nhận", f"Rời nhóm {name}?"):
             self.client.send(self.pack(MSG_LEAVE_GROUP, self.my_name, "", name))
 
     def req_unfriend(self, name):
-        if messagebox.askyesno("Xác nhận", f"Hủy kết bạn với {name}?"):
+        if self.show_confirm("Xác nhận", f"Hủy kết bạn với {name}?"):
             self.client.send(self.pack(MSG_UNFRIEND, self.my_name, "", name))
 
     def req_members(self):
@@ -836,22 +1034,26 @@ class ChatClient(ctk.CTk):
         t = self.entry_add.get().strip()
         if t: 
             self.client.send(self.pack(MSG_FRIEND_REQ, self.my_name, "", t))
-            messagebox.showinfo("Thông báo", f"Đã gửi lời mời tới {t}")
+            self.show_info("Thông báo", f"Đã gửi lời mời tới {t}")
             self.entry_add.delete(0, "end")
 
     def create_group(self):
         t = self.entry_add.get().strip()
         if t:
-            p = simpledialog.askstring("Mật khẩu", f"Đặt pass cho nhóm {t}:")
-            if p: self.client.send(self.pack(MSG_CREATE_GROUP_REQ, self.my_name, "", t, p))
-            self.entry_add.delete(0, "end")
+            p = self.show_input("Tạo nhóm", f"Đặt mật khẩu cho nhóm [{t}]:")
+            
+            if p is not None: 
+                self.client.send(self.pack(MSG_CREATE_GROUP_REQ, self.my_name, "", t, p))
+                self.entry_add.delete(0, "end") # Xóa tên nhóm sau khi gửi
 
     def join_group(self):
         t = self.entry_add.get().strip()
         if t:
-            p = simpledialog.askstring("Mật khẩu", f"Nhập pass nhóm {t}:")
-            if p: self.client.send(self.pack(MSG_JOIN_GROUP_REQ, self.my_name, "", t, p))
-            self.entry_add.delete(0, "end")
+            p = self.show_input("Tham gia nhóm", f"Nhập mật khẩu nhóm [{t}]:")
+            
+            if p is not None:
+                self.client.send(self.pack(MSG_JOIN_GROUP_REQ, self.my_name, "", t, p))
+                self.entry_add.delete(0, "end")
 
     def send_msg(self, event=None):
         txt = self.entry_msg.get()
@@ -865,6 +1067,7 @@ class ChatClient(ctk.CTk):
             self.render_bubble(self.my_name, txt, True, False)
             self.entry_msg.delete(0, "end")
             self.after(50, self.scroll_to_bottom)
+            self.move_to_top(self.current_target)
 
     def scroll_to_bottom(self):
         """Hàm cuộn xuống dưới cùng khung chat"""
@@ -968,13 +1171,13 @@ class ChatClient(ctk.CTk):
     def req_game(self):
         """Gửi lời mời chơi game"""
         if not self.current_target: return
-        # Chỉ cho chơi Private
         if self.contacts[self.current_target].type == "GROUP":
-            messagebox.showwarning("Lỗi", "Chỉ chơi Caro 1 vs 1 thôi!")
+            self.show_info("Lỗi", "Chỉ chơi Caro 1 vs 1 thôi!") 
             return
 
         self.client.send(self.pack(MSG_GAME_REQ, self.my_name, "", self.current_target))
-        messagebox.showinfo("Game", "Đã gửi lời mời, đợi họ đồng ý nhé!")
+        
+        self.show_info("Game", "Đã gửi lời mời, đợi họ đồng ý nhé!")
 
     def send_game_move(self, row, col, is_win):
         """Callback khi mình đánh 1 nước"""
