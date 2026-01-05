@@ -49,6 +49,32 @@ MSG_GAME_END          = 26  # Kết thúc game
 MSG_REQ_PENDING_LIST  = 27  # Yêu cầu danh sách lời mời kết bạn đang chờ
 MSG_RESP_PENDING_LIST = 28  # Trả lời danh sách lời mời kết bạn đang chờ
 
+# --- MÀU SẮC GIAO DIỆN ---
+THEME = {
+    "bg_main":       "#1E1E2E",  # Nền chính (Tối sẫm)
+    "bg_sidebar":    "#181825",  # Sidebar (Tối hơn)
+    "bg_input":      "#313244",  # Ô input
+    "text_main":     "#CDD6F4",  # Chữ trắng ngà
+    "text_sub":      "#A6ADC8",  # Chữ xám xanh
+    
+    "primary":       "#89B4FA",  # Xanh chủ đạo
+    "primary_dark":  "#1e66f5",  # Xanh đậm
+    "secondary":     "#45475A",  # Nền tin nhắn đối phương
+    "btn_add":       "#06d6a0",  
+    "btn_group":     "#118ab2",  
+    "btn_join":      "#073b4c",  
+    "btn_notify":    "#9d4edd",
+    "btn_game":      "#ef476f",  # Hồng đậm (Game - Nổi bật nhất)
+    "btn_file":      "#06d6a0",  # Xanh ngọc (File - Giống nút thêm bạn)
+    "success":       "#A6E3A1",
+    "danger":        "#F38BA8",
+    "warning":       "#F9E2AF",
+}
+
+# Cài đặt mặc định cho CustomTkinter
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("dark-blue")
+
 # --- LỚP POPUP TÙY CHỈNH ---
 class CustomPopup(ctk.CTkToplevel):
     def __init__(self, master, title, message, type="INFO"):
@@ -188,24 +214,46 @@ class NotificationPopup(ctk.CTkToplevel):
 
 # --- LỚP GIAO DIỆN ---
 class ContactButton(ctk.CTkButton):
-    # Thêm tham số on_right_click vào cuối
     def __init__(self, master, real_name, display_text, type, callback, on_right_click):
-        super().__init__(master, text=display_text, anchor="w", command=lambda: callback(real_name, type))
+        super().__init__(master, text=display_text, anchor="w", 
+                         command=lambda: callback(real_name, type), 
+                         hover=True,
+                         height=45,                 
+                         font=("Roboto Medium", 13), 
+                         corner_radius=6)
+        
         self.type = type
         self.real_name = real_name
-        self.pack(fill="x", pady=2, padx=5)
-        self.configure(fg_color="transparent", text_color="white", height=40)
         
-        # Gắn sự kiện chuột phải
+        # Lưu trữ trạng thái nội tại
+        self.is_selected_mode = False
+        self.is_unread_mode = False
+
+        self.pack(fill="x", pady=2, padx=10)
+        
         self.bind("<Button-3>", lambda event: on_right_click(event, real_name, type))
+        self.update_look()
 
-    def set_unread(self, active):
-        if active: self.configure(fg_color="#C0392B") 
-        else: self.configure(fg_color="transparent")
+    def update_look(self):
+        if self.is_selected_mode:
+            # Đang chọn: Nền Xanh đậm, Chữ sáng
+            self.configure(fg_color=THEME["primary_dark"], text_color=THEME["bg_main"])
+        elif self.is_unread_mode:
+            # Chưa đọc: Nền Đỏ nhạt, Chữ Đỏ đậm (hoặc trắng)
+            self.configure(fg_color=THEME["danger"], text_color=THEME["bg_sidebar"])
+        else:
+            # Bình thường: Trong suốt, Chữ màu phụ
+            self.configure(fg_color="transparent", text_color=THEME["text_sub"])
 
-    def set_active_bg(self, active):
-        if active: self.configure(fg_color="#2980B9") 
-        else: self.configure(fg_color="transparent")
+    def set_selected(self, selected):
+        self.is_selected_mode = selected
+        if selected: self.is_unread_mode = False 
+        self.update_look()
+
+    def set_unread(self, unread):
+        if self.is_selected_mode: self.is_unread_mode = False
+        else: self.is_unread_mode = unread
+        self.update_look()
 
 # --- LỚP BÀN CỜ CARO ---
 class CaroBoard(ctk.CTkToplevel):
@@ -384,84 +432,121 @@ class ChatClient(ctk.CTk):
         self.init_ui()
 
     def init_ui(self):
-        # LOGIN SCREEN
-        self.login_frame = ctk.CTkFrame(self)
-        self.login_frame.pack(fill="both", expand=True)
-        ctk.CTkLabel(self.login_frame, text="ĐĂNG NHẬP", font=("Arial", 30, "bold")).pack(pady=40)
-        self.entry_user = ctk.CTkEntry(self.login_frame, placeholder_text="Username", width=300)
-        self.entry_user.pack(pady=10)
-        self.entry_pass = ctk.CTkEntry(self.login_frame, placeholder_text="Password", show="*", width=300)
-        self.entry_pass.pack(pady=10)
-        ctk.CTkButton(self.login_frame, text="Login", command=self.login, width=300).pack(pady=20)
+        # --- SỰ KIỆN: Click ra ngoài -> Mất Focus ô nhập liệu ---
+        self.bind("<Button-1>", self.clear_focus)
 
-        # MAIN SCREEN
-        self.main_ui = ctk.CTkFrame(self)
+        # --- LOGIN SCREEN ---
+        self.login_frame = ctk.CTkFrame(self, fg_color=THEME["bg_main"])
+        self.login_frame.pack(fill="both", expand=True)
         
-        # Sidebar
-        self.sidebar = ctk.CTkFrame(self.main_ui, width=300, corner_radius=0)
+        ctk.CTkLabel(self.login_frame, text="MESSENGER PRO", font=("Arial", 32, "bold"), text_color=THEME["primary"]).pack(pady=(80, 20))
+        
+        self.entry_user = ctk.CTkEntry(self.login_frame, placeholder_text="Username", width=320, height=45, 
+                                       fg_color=THEME["bg_input"], border_color=THEME["primary"], corner_radius=10)
+        self.entry_user.pack(pady=10)
+        
+        self.entry_pass = ctk.CTkEntry(self.login_frame, placeholder_text="Password", show="*", width=320, height=45, 
+                                       fg_color=THEME["bg_input"], border_color=THEME["primary"], corner_radius=10)
+        self.entry_pass.pack(pady=10)
+        
+        ctk.CTkButton(self.login_frame, text="Đăng Nhập", command=self.login, width=320, height=45, 
+                      fg_color=THEME["primary_dark"], hover_color=THEME["primary"], font=("Arial", 14, "bold"), corner_radius=10).pack(pady=30)
+
+        # --- MAIN SCREEN ---
+        self.main_ui = ctk.CTkFrame(self, fg_color=THEME["bg_main"])
+        
+        # 1. SIDEBAR
+        self.sidebar = ctk.CTkFrame(self.main_ui, width=300, corner_radius=0, fg_color=THEME["bg_sidebar"])
         self.sidebar.pack(side="left", fill="y")
         
-        self.lbl_name = ctk.CTkLabel(self.sidebar, text="...", font=("Arial", 20, "bold"))
-        self.lbl_name.pack(pady=15)
+        self.lbl_name = ctk.CTkLabel(self.sidebar, text="...", font=("Arial", 20, "bold"), text_color=THEME["primary"])
+        self.lbl_name.pack(pady=(20, 10))
         
-        self.entry_add = ctk.CTkEntry(self.sidebar, placeholder_text="Nhập tên người/nhóm...")
-        self.entry_add.pack(fill="x", padx=10, pady=5)
+        # Ô Tìm kiếm
+        self.entry_add = ctk.CTkEntry(self.sidebar, placeholder_text="Tìm hoặc nhập tên...", height=35,
+                                      fg_color=THEME["bg_input"], border_width=0, text_color=THEME["text_main"])
+        self.entry_add.pack(fill="x", padx=15, pady=10)
         
-        # --- KHU VỰC CÁC NÚT CHỨC NĂNG ---
+        # --- CÁC NÚT CHỨC NĂNG (MÀU GRADIENT HIỆN ĐẠI) ---
         btn_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=5) 
-        ctk.CTkButton(btn_frame, text="+ Bạn", width=70, fg_color="green", 
-                      command=self.req_friend).pack(side="left", padx=2)
-        ctk.CTkButton(btn_frame, text="+ Nhóm", width=70, fg_color="#D35400", 
-                      command=self.create_group).pack(side="left", padx=2)
-        ctk.CTkButton(btn_frame, text="Vào Nhóm", width=70, fg_color="#2980B9", 
-                      command=self.join_group).pack(side="left", padx=2)
-        self.btn_notify = ctk.CTkButton(btn_frame, text="🔔", width=30, fg_color="#8e44ad", 
+        btn_frame.pack(fill="x", padx=10, pady=5)
+        
+        def create_modern_btn(txt, cmd, color, width=65):
+            return ctk.CTkButton(btn_frame, text=txt, width=width, height=35, 
+                                 fg_color=color, hover_color=THEME["primary"], 
+                                 command=cmd, font=("Arial", 11, "bold"))
+
+        # Add Bạn: Màu Xanh Ngọc (Sáng nhất)
+        create_modern_btn("+ Bạn", self.req_friend, THEME["btn_add"]).pack(side="left", padx=2, expand=True, fill="x")
+        
+        # Add Nhóm: Màu Xanh Lơ (Đậm hơn chút)
+        create_modern_btn("+ Nhóm", self.create_group, THEME["btn_group"]).pack(side="left", padx=2, expand=True, fill="x")
+        
+        # Vào Nhóm: Màu Xanh Dương Tối (Nền tảng)
+        create_modern_btn("Vào", self.join_group, THEME["btn_join"], width=50).pack(side="left", padx=2, expand=True, fill="x")
+        
+        # Nút Thông báo: Màu Tím (Điểm nhấn cuối cùng)
+        self.btn_notify = ctk.CTkButton(btn_frame, text="🔔", width=40, height=35, 
+                                        fg_color=THEME["btn_notify"], hover_color=THEME["warning"], 
                                         command=self.req_notification_list)
         self.btn_notify.pack(side="left", padx=2)
 
-        ctk.CTkLabel(self.sidebar, text="─── DANH SÁCH ───").pack(pady=10)
+        ctk.CTkLabel(self.sidebar, text="DANH SÁCH", font=("Arial", 11, "bold"), text_color=THEME["text_sub"]).pack(anchor="w", padx=15, pady=(20,5))
+        
         self.scroll_contacts = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent")
         self.scroll_contacts.pack(fill="both", expand=True)
 
-        # Chat Area
-        self.right_frame = ctk.CTkFrame(self.main_ui)
+        # 2. CHAT AREA
+        self.right_frame = ctk.CTkFrame(self.main_ui, fg_color=THEME["bg_main"])
         self.right_frame.pack(side="right", fill="both", expand=True)
 
-        # Header Frame (Để chứa tên nhóm và nút xem thành viên)
-        self.header_frame = ctk.CTkFrame(self.right_frame, height=40, fg_color="#222")
+        # Header
+        self.header_frame = ctk.CTkFrame(self.right_frame, height=60, fg_color=THEME["bg_main"], corner_radius=0)
         self.header_frame.pack(fill="x")
-
-        # Nút xem thành viên (Mặc định ẩn, chỉ hiện khi chat nhóm)
-        self.btn_members = ctk.CTkButton(self.header_frame, text="Thành viên", width=80, height=25, 
-                                         fg_color="#555", command=self.req_members)
         
-        self.header_chat = ctk.CTkLabel(self.right_frame, text="Chào mừng!", font=("Arial", 16, "bold"), height=40, fg_color="#222")
-        self.header_chat.pack(fill="x")
+        line = ctk.CTkFrame(self.header_frame, height=2, fg_color=THEME["bg_input"])
+        line.pack(side="bottom", fill="x")
 
-        self.scroll_chat = ctk.CTkScrollableFrame(self.right_frame, fg_color="#1a1a1a")
-        self.scroll_chat.pack(fill="both", expand=True, padx=5, pady=5)
+        self.header_chat = ctk.CTkLabel(self.header_frame, text="Chào mừng!", font=("Arial", 18, "bold"), text_color=THEME["text_main"])
+        self.header_chat.pack(side="left", padx=20, pady=15)
 
-        self.input_frame = ctk.CTkFrame(self.right_frame, height=50)
-        self.input_frame.pack(fill="x", padx=5, pady=5)
+        self.btn_members = ctk.CTkButton(self.header_frame, text="Thành viên", width=100, height=30, 
+                                         fg_color=THEME["bg_input"], hover_color=THEME["secondary"],
+                                         text_color=THEME["text_sub"], command=self.req_members)
 
-        # --- NÚT GỬI FILE (BÊN TRÁI) ---
-        self.btn_file = ctk.CTkButton(self.input_frame, text="+", width=35, fg_color="#444", command=self.choose_file)
-        self.btn_file.pack(side="left", padx=5)
+        self.scroll_chat = ctk.CTkScrollableFrame(self.right_frame, fg_color="transparent") 
+        self.scroll_chat.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # INPUT FRAME
+        self.input_frame = ctk.CTkFrame(self.right_frame, height=60, fg_color=THEME["bg_main"])
+        self.input_frame.pack(fill="x", padx=20, pady=20)
+
+        # Nút chức năng phụ
+        self.btn_file = ctk.CTkButton(self.input_frame, text="📁", width=40, height=40, 
+                                      fg_color=THEME["bg_input"], hover_color=THEME["btn_file"], 
+                                      command=self.choose_file)
+        self.btn_file.pack(side="left", padx=(0, 10))
         
-        # --- NÚT CHƠI GAME (BÊN TRÁI) ---
-        self.btn_game = ctk.CTkButton(self.input_frame, text="🎮", width=35, fg_color="#8e44ad", command=self.req_game)
-        self.btn_game.pack(side="left", padx=5)
+        # Nút Game (Dùng màu Hồng/Đỏ để nổi bật sự giải trí)
+        self.btn_game = ctk.CTkButton(self.input_frame, text="🎮", width=40, height=40, 
+                                      fg_color=THEME["bg_input"], hover_color=THEME["btn_game"], 
+                                      command=self.req_game)
+        self.btn_game.pack(side="left", padx=(0, 10))
 
-        self.entry_msg = ctk.CTkEntry(self.input_frame, placeholder_text="Nhập tin nhắn...")
+        self.entry_msg = ctk.CTkEntry(self.input_frame, placeholder_text="Nhập tin nhắn...", height=45,
+                                      fg_color=THEME["bg_input"], border_width=0, text_color="white", corner_radius=20)
         self.entry_msg.pack(side="left", fill="x", expand=True, padx=5)
         self.entry_msg.bind("<Return>", self.send_msg)
         
-        # Biến hỗ trợ tải file
-        self.downloading_file = None # Biến giữ file đang tải về
-        self.downloading_path = ""   # Đường dẫn lưu file
+        ctk.CTkButton(self.input_frame, text="➤", width=50, height=45, 
+                      fg_color=THEME["primary_dark"], hover_color=THEME["primary"], 
+                      command=self.send_msg, corner_radius=20).pack(side="right", padx=(10, 0))
 
-        ctk.CTkButton(self.input_frame, text="Gửi", width=60, command=self.send_msg).pack(side="right", padx=5)
+    
+    # --- HÀM BỎ CHỌN Ô NHẬP KHI CLICK RA NGOÀI ---
+    def clear_focus(self, event):
+        if not isinstance(event.widget, (tk.Entry, ctk.CTkEntry)):
+            self.focus()
 
     # --- HÀM DI CHUYỂN LIÊN HỆ LÊN ĐẦU DANH SÁCH ---
     def move_to_top(self, name):
@@ -481,7 +566,12 @@ class ChatClient(ctk.CTk):
         # Pack lại từng nút theo thứ tự mới trong contact_order
         for contact_name in self.contact_order:
             if contact_name in self.contacts:
-                self.contacts[contact_name].pack(fill="x", pady=2, padx=5)
+                btn = self.contacts[contact_name]
+                btn.pack(fill="x", pady=2, padx=5)
+                
+                btn.update_look()
+        
+
 
 
     # --- HÀM GỌI POPUP TIỆN ÍCH (THÊM MỚI VÀO ĐÂY) ---
@@ -645,7 +735,6 @@ class ChatClient(ctk.CTk):
         content = decode_safe(data[5])
         
         print(f"[DEBUG] Type={m_type} | Sender={sender} | Target={target}") 
-\
         if m_type in [MSG_PRIVATE_CHAT, MSG_GROUP_CHAT, MSG_HISTORY]:
             self.process_chat_msg(m_type, sender, target, content, data)
 
@@ -799,11 +888,11 @@ class ChatClient(ctk.CTk):
             # content chứa danh sách user: "UserA,UserB"
             NotificationPopup(self, content, self.accept_pending_request)
 
-        if type != MSG_HISTORY:
+        if m_type != MSG_HISTORY:
             # Xác định ai là người cần đưa lên top
             # Nếu chat riêng: Người gửi (sender) nhảy lên top
             # Nếu chat nhóm: Tên nhóm (target) nhảy lên top
-            name_to_bump = target if (type == MSG_GROUP_CHAT) else sender
+            name_to_bump = target if (m_type == MSG_GROUP_CHAT) else sender
             
             # Trường hợp đặc biệt: Nếu mình gửi tin (message echo từ server)
             if sender == self.my_name:
@@ -872,6 +961,10 @@ class ChatClient(ctk.CTk):
                                is_file=is_file_msg, filename=filename)
             
             self.after(50, self.scroll_to_bottom) 
+
+
+            if chat_key in self.contacts:
+                self.contacts[chat_key].set_selected(True)
             
         elif not is_history:
             if chat_key in self.contacts:
@@ -934,12 +1027,18 @@ class ChatClient(ctk.CTk):
     
     #--- HÀM CHỌN ĐOẠN CHAT ---
     def select_contact(self, name, mode):
+        # 1. Bỏ highlight người cũ
         if self.current_target and self.current_target in self.contacts:
-            self.contacts[self.current_target].set_active_bg(False)
+            self.contacts[self.current_target].set_selected(False)
+            
+        # 2. Cập nhật người mới
         self.current_target = name
-        self.contacts[name].set_active_bg(True)
-        self.contacts[name].set_unread(False)
         self.header_chat.configure(text=f"Đang chat với: {name}")
+        
+        # 3. Bật highlight người mới
+        if name in self.contacts:
+            self.contacts[name].set_selected(True)
+            self.contacts[name].set_unread(False)
 
         # Hiện/Ẩn nút thành viên
         if mode == "GROUP":
@@ -995,40 +1094,53 @@ class ChatClient(ctk.CTk):
         
         if is_sys:
             frame.pack(fill="x", pady=5)
-            ctk.CTkLabel(frame, text=content, font=("Arial", 11, "italic"), text_color="gray").pack()
-            return # Dừng luôn nếu là tin hệ thống
+            # Tin hệ thống: Căn giữa, nhỏ, màu xám
+            ctk.CTkLabel(frame, text=content, font=("Arial", 11, "italic"), text_color=THEME["text_sub"]).pack()
+            return
 
-        # --- XỬ LÝ CHO PHÍA NGƯỜI GỬI (LÀ MÌNH) ---
         if is_me:
-            frame.pack(fill="x", pady=5, anchor="e")
+            # TIN CỦA MÌNH: Căn phải, Màu Primary
+            frame.pack(fill="x", pady=2, anchor="e")
+            
+            # Bong bóng chat
+            bubble_color = THEME["primary_dark"]
+            text_col = "white"
             
             if is_file:
                 btn = ctk.CTkButton(frame, text=f"📁 {content}", 
-                                    fg_color="#0066cc", hover_color="#0052a3", # Màu xanh đậm hơn
-                                    width=150,
-                                    state="normal", # Hoặc "disabled" nếu không muốn cho bấm
-                                    # Nếu muốn bấm để tải lại file của chính mình (để test server)
+                                    fg_color=THEME["bg_input"], hover_color=THEME["primary"], 
+                                    text_color=THEME["primary"],
+                                    width=180, height=40, corner_radius=15,
                                     command=lambda: self.request_download(filename))
                 btn.pack(side="right")
             else:
-                # Tin nhắn văn bản thường
-                ctk.CTkLabel(frame, text=content, fg_color="#0084ff", text_color="white", corner_radius=15, padx=10, pady=5).pack(side="right")
-
-        # --- XỬ LÝ CHO PHÍA NGƯỜI NHẬN (LÀ HỌ) ---
+                lbl = ctk.CTkLabel(frame, text=content, 
+                                   fg_color=bubble_color, text_color=text_col, 
+                                   corner_radius=18, padx=15, pady=8,
+                                   font=("Roboto", 13))
+                lbl.pack(side="right")
         else:
-            frame.pack(fill="x", pady=5, anchor="w")
-            ctk.CTkLabel(frame, text=sender, font=("Arial", 9), text_color="gray").pack(anchor="w", padx=5)
+            # TIN NGƯỜI KHÁC: Căn trái, Màu Secondary
+            frame.pack(fill="x", pady=2, anchor="w")
+            
+            # Tên người gửi nhỏ ở trên
+            ctk.CTkLabel(frame, text=sender, font=("Arial", 10, "bold"), text_color=THEME["text_sub"]).pack(anchor="w", padx=10)
+            
+            bubble_color = THEME["secondary"]
             
             if is_file:
-                # Nếu là file họ gửi -> Vẽ nút Tải về (Màu xanh lá)
                 btn = ctk.CTkButton(frame, text=f"⬇ {content}", 
-                                    fg_color="#2ecc71", hover_color="#27ae60",
-                                    width=150,
+                                    fg_color=THEME["success"], hover_color="#8bd5ca", 
+                                    text_color=THEME["bg_sidebar"],
+                                    width=180, height=40, corner_radius=15,
                                     command=lambda: self.request_download(filename))
                 btn.pack(side="left")
             else:
-                # Tin nhắn văn bản thường
-                ctk.CTkLabel(frame, text=content, fg_color="#333", text_color="white", corner_radius=15, padx=10, pady=5).pack(side="left")
+                lbl = ctk.CTkLabel(frame, text=content, 
+                                   fg_color=bubble_color, text_color="white", 
+                                   corner_radius=18, padx=15, pady=8,
+                                   font=("Roboto", 13))
+                lbl.pack(side="left")
 
     def req_friend(self):
         t = self.entry_add.get().strip()
