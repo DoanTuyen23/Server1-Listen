@@ -483,7 +483,7 @@ class ChatClient(ctk.CTk):
         create_modern_btn("+ Nhóm", self.create_group, THEME["btn_group"]).pack(side="left", padx=2, expand=True, fill="x")
         
         # Vào Nhóm: Màu Xanh Dương Tối (Nền tảng)
-        create_modern_btn("Vào", self.join_group, THEME["btn_join"], width=50).pack(side="left", padx=2, expand=True, fill="x")
+        create_modern_btn("Vào nhóm", self.join_group, THEME["btn_join"], width=50).pack(side="left", padx=2, expand=True, fill="x")
         
         # Nút Thông báo: Màu Tím (Điểm nhấn cuối cùng)
         self.btn_notify = ctk.CTkButton(btn_frame, text="🔔", width=40, height=35, 
@@ -491,7 +491,7 @@ class ChatClient(ctk.CTk):
                                         command=self.req_notification_list)
         self.btn_notify.pack(side="left", padx=2)
 
-        ctk.CTkLabel(self.sidebar, text="DANH SÁCH", font=("Arial", 11, "bold"), text_color=THEME["text_sub"]).pack(anchor="w", padx=15, pady=(20,5))
+        ctk.CTkLabel(self.sidebar, text="--- DANH SÁCH ---", font=("Arial", 11, "bold"), text_color=THEME["text_sub"]).pack(anchor="center", padx=15, pady=(20,5))
         
         self.scroll_contacts = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent")
         self.scroll_contacts.pack(fill="both", expand=True)
